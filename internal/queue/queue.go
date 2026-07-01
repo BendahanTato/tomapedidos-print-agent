@@ -259,9 +259,10 @@ func (q *Queue) MarkPrinted(j *Job) {
 	delete(q.byID, j.ID)
 	q.emit("job.printed", j, "")
 	if q.st != nil {
-		if err := q.st.deleteJob(j.ID); err != nil && q.log != nil {
-			q.log.Warn("persist delete failed", "job_id", j.ID, "error", err)
-		}
+		// Keep printed jobs in the store so the panel can show history.
+		// Old jobs are pruned by a periodic vacuum that can be added
+		// later. For now the operator can see everything.
+		q.persistUpdateLocked(j)
 	}
 }
 
@@ -382,10 +383,6 @@ func (q *Queue) DepthFor(printerID string) int {
 // Caller must hold q.mu.
 func (q *Queue) persistUpdateLocked(j *Job) {
 	if q.st == nil {
-		return
-	}
-	if j.Status == StatusPrinted {
-		_ = q.st.deleteJob(j.ID)
 		return
 	}
 	if err := q.st.updateJob(j); err != nil && q.log != nil {

@@ -300,31 +300,68 @@
   }
 
   // ---------- jobs ----------
+  var jobsFilter = '';
+
   async function loadJobs() { renderJobs(); }
   async function renderJobs() {
     var v = $('#view-jobs');
-    v.innerHTML = '<div class="card-header"><h2 class="card-title">Jobs</h2><div class="flex gap-1"><button class="btn btn-sm" id="jobs-refresh">Refrescar</button><select class="form-select" id="jobs-filter" style="width:auto"><option value="">Todos</option><option value="queued">Queued</option><option value="printing">Printing</option><option value="printed">Printed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select></div></div>';
 
-    var filter = $('#jobs-filter').value || '';
-    var query = filter ? '?status=' + filter : '';
-    try {
-      var data = await api('GET', '/jobs' + query);
-      var jobs = data.jobs || [];
-      if (jobs.length === 0) {
-        v.innerHTML += '<div class="card"><p class="text-muted">No hay jobs' + (filter ? ' con estado ' + filter : '') + '.</p></div>';
-      } else {
-        v.innerHTML += '<div class="card overflow-x"><table class="data-table"><thead><tr><th>ID</th><th>Printer</th><th>Status</th><th>Bytes</th><th>Att</th><th>Created</th><th></th></tr></thead><tbody>' + jobs.map(function (j) {
-          var cls = j.status === 'failed' ? 'red' : j.status === 'printed' ? 'green' : j.status === 'cancelled' ? 'amber' : '';
-          var ca = j.created_at ? new Date(j.created_at).toLocaleString() : '—';
-          return '<tr><td class="text-mono" style="max-width:120px;overflow:hidden;text-overflow:ellipsis" title="' + esc(j.id) + '">' + esc(j.id.slice(0, 12)) + '...</td><td>' + esc(j.printer_id) + '</td><td><span class="badge badge-' + cls + '">' + esc(j.status) + '</span></td><td>' + (j.bytes || 0) + '</td><td>' + (j.attempts || 0) + '/' + (j.max_attempts || 1) + '</td><td>' + ca + '</td><td><div class="flex gap-1"><button class="btn btn-sm reprint-btn" data-id="' + esc(j.id) + '">Reprint</button><button class="btn btn-sm btn-danger cancel-btn" data-id="' + esc(j.id) + '">Cancel</button></div></td></tr>';
-        }).join('') + '</tbody></table></div>';
-      }
-    } catch (e) {
-      v.innerHTML += '<div class="card"><p class="text-muted">Error al cargar jobs: ' + esc(e.message) + '</p></div>';
+    // Fetch ALL jobs first (no filter) to compute the summary counts,
+    // then apply the selected filter for the table.
+    var allData;
+    try { allData = await api('GET', '/jobs'); } catch (_) { allData = { jobs: [] }; }
+    var allJobs = allData.jobs || [];
+    var counts = { queued: 0, printing: 0, printed: 0, failed: 0, cancelled: 0 };
+    allJobs.forEach(function (j) { if (counts[j.status] !== undefined) counts[j.status]++; });
+
+    // Build the filter dropdown, preserving the previous value.
+    var filterOptions = [
+      { v: '',   label: 'Todos (' + allJobs.length + ')' },
+      { v: 'queued',    label: 'Queued (' + counts.queued + ')' },
+      { v: 'printing',  label: 'Printing (' + counts.printing + ')' },
+      { v: 'printed',   label: 'Printed (' + counts.printed + ')' },
+      { v: 'failed',    label: 'Failed (' + counts.failed + ')' },
+      { v: 'cancelled', label: 'Cancelled (' + counts.cancelled + ')' },
+    ];
+    var filterHTML = filterOptions.map(function (o) {
+      var sel = jobsFilter === o.v ? ' selected' : '';
+      return '<option value="' + o.v + '"' + sel + '>' + o.label + '</option>';
+    }).join('');
+
+    v.innerHTML =
+      '<div class="card-header"><h2 class="card-title">Jobs</h2><div class="flex gap-1"><button class="btn btn-sm" id="jobs-refresh">Refrescar</button><select class="form-select" id="jobs-filter" style="width:auto">' +
+      filterHTML +
+      '</select></div></div>';
+
+    // Summary pills
+    var pills = [];
+    if (counts.queued > 0) pills.push('<span class="badge badge-amber">' + counts.queued + ' en cola</span>');
+    if (counts.printing > 0) pills.push('<span class="badge">' + counts.printing + ' imprimiendo</span>');
+    if (counts.printed > 0) pills.push('<span class="badge badge-green">' + counts.printed + ' impresos</span>');
+    if (counts.failed > 0) pills.push('<span class="badge badge-red">' + counts.failed + ' fallidos</span>');
+    if (pills.length > 0) {
+      v.innerHTML += '<div class="flex gap-1 mb-2 flex-wrap">' + pills.join('') + '</div>';
     }
 
-    $('#jobs-refresh').onclick = renderJobs;
-    $('#jobs-filter').onchange = renderJobs;
+    // Filtered list for the table.
+    var jobs = jobsFilter
+      ? allJobs.filter(function (j) { return j.status === jobsFilter; })
+      : allJobs;
+    if (jobs.length === 0) {
+      v.innerHTML += '<div class="card"><p class="text-muted">No hay jobs' + (jobsFilter ? ' con estado ' + jobsFilter : '') + '.</p></div>';
+    } else {
+      v.innerHTML += '<div class="card overflow-x"><table class="data-table"><thead><tr><th>ID</th><th>Printer</th><th>Status</th><th>Bytes</th><th>Att</th><th>Created</th><th></th></tr></thead><tbody>' + jobs.map(function (j) {
+        var cls = j.status === 'failed' ? 'red' : j.status === 'printed' ? 'green' : j.status === 'cancelled' ? 'amber' : '';
+        var ca = j.created_at ? new Date(j.created_at).toLocaleString() : '—';
+        return '<tr><td class="text-mono" style="max-width:100px;overflow:hidden;text-overflow:ellipsis" title="' + esc(j.id) + '">' + esc(j.id.slice(0, 12)) + '…</td><td>' + esc(j.printer_id) + '</td><td><span class="badge badge-' + cls + '">' + esc(j.status) + '</span></td><td>' + (j.bytes || 0) + '</td><td>' + (j.attempts || 0) + '/' + (j.max_attempts || 1) + '</td><td>' + ca + '</td><td><div class="flex gap-1"><button class="btn btn-sm reprint-btn" data-id="' + esc(j.id) + '">Reprint</button><button class="btn btn-sm btn-danger cancel-btn" data-id="' + esc(j.id) + '">Cancel</button></div></td></tr>';
+      }).join('') + '</tbody></table></div>';
+    }
+
+    $('#jobs-refresh').onclick = function () { renderJobs(); };
+    $('#jobs-filter').onchange = function () {
+      jobsFilter = this.value;
+      renderJobs();
+    };
     $$('.reprint-btn').forEach(function (b) { b.onclick = function () { reprintJob(b.dataset.id); }; });
     $$('.cancel-btn').forEach(function (b) { b.onclick = function () { cancelJob(b.dataset.id); }; });
   }
