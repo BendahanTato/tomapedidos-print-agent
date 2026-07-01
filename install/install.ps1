@@ -4,7 +4,7 @@ param(
   [string]$Version = "latest"
 )
 
-$repo = "tomapedidos/print-agent"
+$repo = "BendahanTato/tomapedidos-print-agent"
 $arch = if ([System.Environment]::Is64BitOperatingSystem) { "amd64" } else { "386" }
 $name = "print-agent-windows-$arch.exe"
 $dest = "$env:APPDATA\tomapedidos\print-agent.exe"

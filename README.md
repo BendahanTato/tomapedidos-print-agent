@@ -39,12 +39,12 @@ del SO) o un archivo de debug.
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/tomapedidos/print-agent/main/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell (Run as Administrator)
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/tomapedidos/print-agent/main/install/install.ps1 | Invoke-Expression
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.ps1 | Invoke-Expression
 ```
 
 ## Compilar

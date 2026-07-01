@@ -3,7 +3,7 @@
 # Download the binary from GitHub Releases and install as a user service.
 set -euo pipefail
 
-REPO="tomapedidos/print-agent"
+REPO="BendahanTato/tomapedidos-print-agent"
 VERSION="${VERSION:-latest}"
 
 if [ "$(uname -s)" = "Darwin" ]; then
