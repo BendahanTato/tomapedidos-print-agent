@@ -26,7 +26,7 @@ del SO) o un archivo de debug.
 | Fase | Status | Entrega |
 |---|---|---|
 | M1 | hecho | Agente mínimo con red + file + queue + retries |
-| M2 | pendiente | USB vía spooler del OS (CUPS / Windows Spooler) |
+| M2 | hecho | USB vía spooler del OS (CUPS en Unix, print /d: en Windows) |
 | M3 | pendiente | Cola persistente con SQLite |
 | M4 | pendiente | Persistencia y hot reload de config |
 | M5 | pendiente | Panel web completo (login, CRUD, dashboard) |

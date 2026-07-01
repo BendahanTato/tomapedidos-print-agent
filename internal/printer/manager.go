@@ -45,6 +45,15 @@ func NewFromConfig(ctx context.Context, p config.Printer) (Printer, Info, error)
 		}
 		info.Status = StatusOnline
 		return fp, info, nil
+	case "usb":
+		up := NewUSB(p.ID, p.SystemName)
+		if err := up.Open(ctx); err != nil {
+			info.Status = StatusOffline
+			info.LastError = err.Error()
+			return up, info, nil
+		}
+		info.Status = StatusOnline
+		return up, info, nil
 	default:
 		// Should be unreachable after config.Validate. Return a stub
 		// file printer so the registry always has a working Printer
