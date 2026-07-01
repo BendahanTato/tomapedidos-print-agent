@@ -25,7 +25,6 @@ jobs:
         with:
           go-version-file: "go.mod"
       - name: build
-        id: build
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
           SHORT_SHA="${GITHUB_SHA:0:8}"
@@ -38,14 +37,11 @@ jobs:
           NAME="print-agent-${OS}-${ARCH}${EXT}"
           CGO_ENABLED=0 GOOS="${OS}" GOARCH="${ARCH}" \
             go build -trimpath -ldflags "${LDFLAGS}" -o "${NAME}" ./cmd/print-agent
-          sha256sum "${NAME}" > "${NAME}.sha256"
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "NAME=${NAME}" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
-          name: "${{ steps.build.outputs.name }}"
-          path: |
-            "${{ steps.build.outputs.name }}"
-            "${{ steps.build.outputs.name }}.sha256"
+          name: "print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}"
+          path: "print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}*"
 
   release:
     needs: build
@@ -57,7 +53,10 @@ jobs:
           path: dist/
           merge-multiple: true
       - name: checksums
-        run: (cd dist && cat *.sha256 > SHA256SUMS)
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
       - name: create release
         uses: softprops/action-gh-release@v2
         with:
