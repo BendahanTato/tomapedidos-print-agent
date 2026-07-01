@@ -24,7 +24,7 @@ import (
 
 // webFS embeds the static panel assets (index.html, js/, css/).
 //
-//go:embed web
+//go:embed all:web
 var webFS embed.FS
 
 // Deps is the bundle of objects the HTTP handlers need.

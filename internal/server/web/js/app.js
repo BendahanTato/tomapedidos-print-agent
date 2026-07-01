@@ -202,8 +202,23 @@
       var data = await api('GET', '/printers/detect');
       var names = data.printers || [];
       if (names.length === 0) { toast('No se encontraron impresoras en el OS', 'warn'); return; }
-      toast('Encontradas: ' + names.join(', '), 'success');
-      showPrinterModal(null, names);
+
+      var existingNames = {};
+      try {
+        var cfgResp = await api('GET', '/config');
+        (cfgResp.printers || []).forEach(function (p) {
+          if (p.system_name) existingNames[p.system_name] = true;
+        });
+      } catch (_) {}
+
+      var detected = names.filter(function (n) { return !existingNames[n]; });
+      if (detected.length === 0) {
+        toast('Todas las impresoras detectadas ya están configuradas', 'warn');
+        return;
+      }
+
+      toast('Encontradas: ' + detected.length + ' impresora(s) nueva(s)', 'success');
+      showPrinterModal(null, detected);
     } catch (e) { toast('Error: ' + e.message, 'error'); }
   }
 
@@ -212,7 +227,25 @@
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.id = 'printer-modal';
+
+    var detectedSection = '';
+    if (detectedNames && detectedNames.length > 0) {
+      detectedSection =
+        '<div class="detected-section mb-2">' +
+          '<p class="text-muted mb-2">Impresoras detectadas en el OS:</p>' +
+          '<div class="detected-list">' +
+            detectedNames.map(function (n) {
+              return '<label class="detected-item">' +
+                '<input type="radio" name="detected-printer" value="' + esc(n) + '" class="detected-radio">' +
+                '<span class="detected-name">' + esc(n) + '</span>' +
+              '</label>';
+            }).join('') +
+          '</div>' +
+        '</div>';
+    }
+
     overlay.innerHTML = '<div class="modal"><div class="modal-header"><span class="modal-title">' + (isEdit ? 'Editar' : 'Nueva') + ' Impresora</span><button class="modal-close">&times;</button></div>' +
+      detectedSection +
       '<div class="form-group"><label class="form-label">ID</label><input class="form-input" id="pf-id" value="' + esc(printer ? printer.id : '') + '" placeholder="cocina, caja, barra..."></div>' +
       '<div class="form-group"><label class="form-label">Nombre</label><input class="form-input" id="pf-name" value="' + esc(printer ? printer.name : '') + '" placeholder="Cocina"></div>' +
       '<div class="form-group"><label class="form-label">Tipo</label><select class="form-select" id="pf-type"><option value="network">network (TCP 9100)</option><option value="usb">usb (spooler)</option><option value="file">file (debug)</option></select></div>' +
@@ -221,7 +254,6 @@
       '<div id="pf-file" class="hidden"><div class="form-group"><label class="form-label">File Path</label><input class="form-input" id="pf-filepath" value="' + esc(printer ? printer.file_path || '' : '') + '" placeholder="/tmp/out.bin"></div></div>' +
       '<div class="grid-2"><div class="form-group"><label class="form-label">Code Page</label><select class="form-select" id="pf-cp"><option>cp850</option><option>cp437</option><option>cp860</option><option>cp865</option><option>cp1252</option></select></div><div class="form-group"><label class="form-label">Chars/Line</label><input class="form-input" id="pf-cpl" type="number" value="' + (printer ? printer.chars_per_line || 42 : 42) + '"></div></div>' +
       '<div class="form-group"><label class="form-label">Cut</label><select class="form-select" id="pf-cut"><option value="partial">partial</option><option value="full">full</option><option value="none">none</option></select></div>' +
-      (detectedNames ? '<div class="mb-2"><p class="text-muted">Impresoras detectadas: ' + detectedNames.map(function (n) { return '<code class="text-mono">' + esc(n) + '</code>'; }).join(', ') + '</p></div>' : '') +
       '<div class="modal-footer"><button class="btn" id="pf-cancel">Cancelar</button><button class="btn btn-primary" id="pf-save">' + (isEdit ? 'Guardar' : 'Agregar') + '</button></div></div>';
     document.body.appendChild(overlay);
 
@@ -229,6 +261,21 @@
     if (printer && printer.code_page) $('#pf-cp').value = printer.code_page;
     if (printer && printer.cut) $('#pf-cut').value = printer.cut;
     togglePrinterFields();
+
+    if (detectedNames && detectedNames.length > 0) {
+      $$('.detected-radio').forEach(function (radio) {
+        radio.addEventListener('change', function () {
+          if (this.checked) {
+            var name = this.value;
+            $('#pf-name').value = name;
+            $('#pf-sysname').value = name;
+            $('#pf-id').value = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+            $('#pf-type').value = 'usb';
+            togglePrinterFields();
+          }
+        });
+      });
+    }
 
     $('#pf-type').onchange = togglePrinterFields;
     $('#pf-cancel').onclick = function () { overlay.remove(); };
