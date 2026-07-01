@@ -1,0 +1,59 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: build
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          COMMIT="${GITHUB_SHA:0:8}"
+          BUILDTIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-s -w -X github.com/tomapedidos/print-agent/internal/version.Version=${VERSION} -X github.com/tomapedidos/print-agent/internal/version.Commit=${COMMIT} -X github.com/tomapedidos/print-agent/internal/version.BuildTime=${BUILDTIME}"
+          ext=""
+          [ "${{ matrix.target.goos }}" = "windows" ] && ext=".exe"
+          name="print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}${ext}"
+          CGO_ENABLED=0 GOOS=${{ matrix.target.goos }} GOARCH=${{ matrix.target.goarch }} \
+            go build -trimpath -ldflags "${LDFLAGS}" -o "${name}" ./cmd/print-agent
+          shasum -a 256 "${name}" > "${name}.sha256"
+          echo "name=${name}" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.name }}
+          path: ${{ env.name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "print-agent-*"
+          path: dist/
+          merge-multiple: true
+      - name: checksums
+        run: (cd dist && cat *.sha256 > SHA256SUMS)
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

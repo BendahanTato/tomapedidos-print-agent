@@ -32,8 +32,20 @@ del SO) o un archivo de debug.
 | M5 | pendiente | Panel web completo (login, CRUD, dashboard) |
 | M6 | hecho | WebSocket /events para status en vivo (reemplaza polling del panel) |
 | M7 | hecho | Service mode (launchd / systemd / SCM) |
-| M8 | pendiente | Distribución (binarios firmados + instaladores) |
+| M8 | hecho | Distribucion (binarios firmados + instaladores) |
 | M9 | pendiente | Hardening (rate limit, métricas, logs con rotación) |
+
+## Instalación rápida
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/tomapedidos/print-agent/main/install/install.sh | bash
+```
+
+```powershell
+# Windows PowerShell (Run as Administrator)
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/tomapedidos/print-agent/main/install/install.ps1 | Invoke-Expression
+```
 
 ## Compilar
 
