@@ -75,9 +75,8 @@
     ws = new WebSocket(url);
     ws.onopen = function () {
       // Initial full load via REST, then WS keeps it fresh.
-      loadDashboard();
-      if (currentView === 'printers') loadPrinters();
-      if (currentView === 'jobs') loadJobs();
+      fetch('/health').then(function (r) { return r.json(); }).then(function (d) { healthData = d; }).catch(function () {});
+      fetch('/printers').then(function (r) { return r.json(); }).then(function (d) { printersData = (d.printers || []); }).catch(function () {});
     };
     ws.onmessage = function (e) {
       try {
@@ -134,7 +133,18 @@
   }
 
   // ---------- dashboard ----------
-  async function loadDashboard() { renderDashboard(); }
+  async function loadDashboard() {
+    if (!healthData) {
+      try { healthData = await api('GET', '/health'); } catch (_) {}
+    }
+    if (!printersData || printersData.length === 0) {
+      try {
+        var resp = await api('GET', '/printers');
+        printersData = resp.printers || [];
+      } catch (_) {}
+    }
+    renderDashboard();
+  }
   function renderDashboard() {
     var v = $('#view-dashboard');
     var h = healthData;

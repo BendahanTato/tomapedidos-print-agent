@@ -12,6 +12,9 @@ import (
 )
 
 // NewFromConfig instantiates the right concrete Printer for a given
+// config.Printer entry.
+
+// NewFromConfig instantiates the right concrete Printer for a given
 // config.Printer entry. It returns an error if the type is unknown or
 // required fields are missing (Validate should have caught this already).
 func NewFromConfig(ctx context.Context, p config.Printer) (Printer, Info, error) {
@@ -96,6 +99,49 @@ func Heartbeat(ctx context.Context, reg *Registry, log *slog.Logger, every time.
 						Status:  string(newInfo.Status),
 					})
 				}
+			}
+		}
+	}
+}
+
+// SyncFromConfig reconciles the registry with the provided config.
+// New printers are opened and registered; printers removed from the
+// config are closed and removed from the registry. Used by PUT /config
+// so the operator can add/remove printers without restarting the agent.
+func SyncFromConfig(ctx context.Context, reg *Registry, cfg config.Config, log *slog.Logger) {
+	// Collect desired IDs from the config.
+	want := make(map[string]config.Printer, len(cfg.Printers))
+	for _, p := range cfg.Printers {
+		want[p.ID] = p
+	}
+	// Remove printers that are no longer in the config.
+	for _, info := range reg.All() {
+		if _, ok := want[info.ID]; !ok {
+			if pr, ok := reg.Printers()[info.ID]; ok {
+				_ = pr.Close()
+			}
+			reg.Remove(info.ID)
+			if log != nil {
+				log.Info("printer removed by config reload", "printer", info.ID)
+			}
+		}
+	}
+	// Add printers that are new in the config.
+	for id, p := range want {
+		if _, ok := reg.Get(id); ok {
+			continue // already registered
+		}
+		pr, info, err := NewFromConfig(ctx, p)
+		if err != nil && log != nil {
+			log.Warn("printer init failed on reload",
+				"printer", id,
+				"error", err.Error(),
+			)
+		}
+		if pr != nil {
+			reg.Add(pr, info)
+			if log != nil {
+				log.Info("printer added by config reload", "printer", id)
 			}
 		}
 	}

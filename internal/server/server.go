@@ -196,6 +196,9 @@ func configPutHandler(d Deps) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
 			return
 		}
+		// Reconcile the registry with the new config so newly added
+		// printers are available immediately without a restart.
+		printer.SyncFromConfig(r.Context(), d.Registry, d.Config.Get(), d.Log)
 		d.Log.Info("config replaced via panel")
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}

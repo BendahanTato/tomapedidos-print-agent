@@ -222,6 +222,11 @@ func runStart(args []string, stdout, stderr *os.File) {
 		fmt.Fprintf(stderr, "queue init failed: %v\n", err)
 		os.Exit(1)
 	}
+	defer func() {
+		if err := q.Close(); err != nil {
+			log.Warn("queue close failed", slog.String("error", err.Error()))
+		}
+	}()
 	for id := range reg.Printers() {
 		reg.SetQueueDepth(id, 0)
 	}

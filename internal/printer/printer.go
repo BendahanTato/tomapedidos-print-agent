@@ -78,6 +78,15 @@ func (r *Registry) Add(p Printer, meta Info) {
 	r.info[p.ID()] = meta
 }
 
+// Remove deletes a printer from the registry.
+func (r *Registry) Remove(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.printers, id)
+	delete(r.info, id)
+	delete(r.lastQueue, id)
+}
+
 // Get returns the live Info for id.
 func (r *Registry) Get(id string) (Info, bool) {
 	r.mu.RLock()
