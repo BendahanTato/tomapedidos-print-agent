@@ -30,6 +30,8 @@ type Event struct {
 // logged and dropped.
 type Sender struct {
 	url      string
+	tenantID string
+	branchID string
 	client   *http.Client
 	log      *slog.Logger
 	bus      *eventbus.Bus
@@ -42,16 +44,18 @@ type Sender struct {
 // New starts a background goroutine that subscribes to the eventbus
 // and POSTs job.failed and printer.status_changed events to callbackURL.
 // If callbackURL is empty, New returns nil (no-op).
-func New(callbackURL string, bus *eventbus.Bus, log *slog.Logger) *Sender {
+func New(callbackURL, tenantID, branchID string, bus *eventbus.Bus, log *slog.Logger) *Sender {
 	if callbackURL == "" || bus == nil {
 		return nil
 	}
 	s := &Sender{
-		url:    callbackURL,
-		client: &http.Client{Timeout: 10 * time.Second},
-		log:    log,
-		bus:    bus,
-		stopCh: make(chan struct{}),
+		url:      callbackURL,
+		tenantID: tenantID,
+		branchID: branchID,
+		client:   &http.Client{Timeout: 10 * time.Second},
+		log:      log,
+		bus:      bus,
+		stopCh:   make(chan struct{}),
 	}
 	s.subID, s.subCh = bus.Subscribe(64)
 	go s.loop()
@@ -112,6 +116,12 @@ func (s *Sender) handle(ev eventbus.Event) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.tenantID != "" {
+		req.Header.Set("X-Tenant-ID", s.tenantID)
+	}
+	if s.branchID != "" {
+		req.Header.Set("X-Branch-ID", s.branchID)
+	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {

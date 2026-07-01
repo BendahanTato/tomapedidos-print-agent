@@ -218,7 +218,7 @@ func runStart(args []string, stdout, stderr *os.File) {
 	bus := eventbus.New()
 
 	// Start callback sender if configured.
-	cbSender := callback.New(cfg.CallbackURL, bus, log)
+	cbSender := callback.New(cfg.CallbackURL, cfg.Tenant.ID, cfg.Tenant.BranchID, bus, log)
 	defer cbSender.Stop()
 
 	q, err := queue.New(cfg.Queue.MaxRetries, cfg.Queue.DedupWindow, cfg.Queue.PersistPath, log, bus)
