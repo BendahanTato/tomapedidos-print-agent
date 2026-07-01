@@ -486,13 +486,23 @@
   }
 
   // ---------- init ----------
-  function init() {
+  async function init() {
     $('#login-form').onsubmit = doLogin;
     $('#logout-btn').onclick = logout;
     $$('.nav-btn').forEach(function (b) {
       b.onclick = function () { route(b.dataset.route); };
     });
-    route('dashboard');
+    // Check if session cookie is still valid.
+    try {
+      await api('GET', '/config');
+      loggedIn = true;
+      $('#login-screen').classList.add('hidden');
+      $('#main-screen').classList.remove('hidden');
+      loadDashboard();
+      startRefresh();
+    } catch (_) {
+      // No valid session — show login screen (default from HTML).
+    }
   }
 
   init();
