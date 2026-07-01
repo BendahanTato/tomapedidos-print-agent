@@ -1,0 +1,38 @@
+{
+  "port": 4510,
+  "bind": "127.0.0.1",
+  "tenant": {
+    "id": "tenant_default",
+    "branch_id": "branch_default"
+  },
+  "printers": [
+    {
+      "id": "cocina",
+      "name": "Cocina",
+      "type": "network",
+      "host": "192.168.1.30",
+      "port": 9100,
+      "code_page": "cp850",
+      "chars_per_line": 42,
+      "cut": "partial"
+    },
+    {
+      "id": "caja",
+      "name": "Caja",
+      "type": "usb",
+      "system_name": "EPSON_TM_T20III",
+      "code_page": "cp850",
+      "chars_per_line": 42,
+      "cut": "partial"
+    }
+  ],
+  "queue": {
+    "max_retries": 3,
+    "retry_backoff_ms": [1000, 3000, 10000],
+    "dedup_window_ms": 300000
+  },
+  "panel": {
+    "enabled": true,
+    "pin": "0000"
+  }
+}

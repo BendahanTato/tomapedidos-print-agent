@@ -1,0 +1,26 @@
+# Build artefacts
+/print-agent
+/print-agent-*
+/dist/
+
+# Local configs (each operator copies printers.example.json)
+configs/printers.json
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+*.coverprofile
+coverage.txt
+coverage.html
+
+# Go workspace files
+go.work
+go.work.sum
