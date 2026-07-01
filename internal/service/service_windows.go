@@ -57,12 +57,12 @@ func (m *scmManager) Stop() error {
 
 // Status queries the service state via SCM.
 func (s *scmManager) Status() (string, error) {
-	mgr, closer, err := connect()
+	sm, closer, err := connect()
 	if err != nil {
 		return "not installed", err
 	}
 	defer closer.Close()
-	serv, err := mgr.OpenService(m.label)
+	serv, err := sm.OpenService(s.label)
 	if err != nil {
 		return "not installed", nil
 	}
@@ -82,11 +82,12 @@ func (s *scmManager) Status() (string, error) {
 }
 
 func connect() (*mgr.Mgr, *closerFunc, error) {
-	m, err := mgr.Connect()
+	sm, err := mgr.Connect()
 	if err != nil {
 		return nil, nil, err
 	}
-	return m, (*closerFunc)(&m.Disconnect), nil
+	disc := sm.Disconnect
+	return sm, (*closerFunc)(&disc), nil
 }
 
 type closerFunc func() error
