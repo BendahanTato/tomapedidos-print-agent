@@ -47,19 +47,15 @@ func (p *USBPrinter) Open(ctx context.Context) error {
 	return p.lpstat(ctx)
 }
 
-// Write sends payload to the OS spooler.
-//
-// The CUPS command is:
-//
-//	lp -d <system_name> -o raw -
-//
-// The `-o raw` flag is essential for thermal receipt printers: without
-// it CUPS may try to interpret the bytes as PostScript or PCL and
-// produce a blank page.
+// Write sends payload to the OS spooler and waits for CUPS to finish
+// processing the job. If the printer is disconnected the job will sit
+// stuck in the CUPS queue; this method detects that and returns an error
+// so the agent doesn't falsely report "printed".
 func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
+	// Submit the job to CUPS.
 	cmd := exec.CommandContext(ctx, "lp",
 		"-d", p.systemName,
 		"-o", "raw",
@@ -70,7 +66,34 @@ func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("lp -d %s: %w%s", p.systemName, err, formatStderr(out))
 	}
-	return nil
+
+	// lp is async — it queues and returns immediately. Poll until the
+	// job finishes or the timeout expires. If the queue is not draining
+	// the printer is probably disconnected.
+	return p.waitForDrain(ctx)
+}
+
+// waitForDrain polls lpstat until the pending queue for this printer
+// is empty (job was printed or errored out) or the context expires.
+func (p *USBPrinter) waitForDrain(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil // no timeout set, trust CUPS.
+	}
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return fmt.Errorf("timeout waiting for printer %s to finish", p.systemName)
+		}
+		// Check if there are still pending jobs for this printer.
+		cmd := exec.CommandContext(ctx, "lpstat", "-o", p.systemName)
+		out, err := cmd.CombinedOutput()
+		if err != nil || len(bytes.TrimSpace(out)) == 0 {
+			// No pending jobs — either printed or cleared.
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout: printer %s queue not draining (printer may be disconnected)", p.systemName)
 }
 
 // Close is a no-op for USBPrinter. The spooler session is per-Write.
