@@ -472,7 +472,9 @@
     v.innerHTML =
       '<h2 class="card-title" style="margin-bottom:1rem">Settings</h2>' +
       '<div class="card"><h3 class="card-title mb-2">PIN del panel</h3><div class="flex gap-1"><input class="form-input" id="s-pin" type="password" maxlength="8" value="' + esc(configData.panel.pin || '') + '" style="width:160px"><button class="btn btn-primary btn-sm" id="s-save-pin">Guardar</button></div></div>' +
-      '<div class="card"><h3 class="card-title mb-2">Acerca de</h3><p class="text-muted">TomaPedidos Print Agent · M5</p><p class="text-muted">Versión: ' + esc((healthData && healthData.version) || '?') + '</p><p class="text-muted">Commit: ' + esc((healthData && healthData.commit) || '?') + '</p></div>';
+      '<div class="card"><h3 class="card-title mb-2">Callback URL</h3><p class="text-muted mb-2">URL del SaaS para recibir notificaciones de errores de impresión. Dejar vacío para desactivar.</p><div class="flex gap-1"><input class="form-input" id="s-callback" type="url" value="' + esc(configData.callback_url || '') + '" placeholder="https://pizza9.tomapedidos.online/api/webhooks/agent/..." style="width:100%"><button class="btn btn-primary btn-sm" id="s-save-callback">Guardar</button></div></div>' +
+      '<div class="card"><h3 class="card-title mb-2">Tenant / Branch</h3><p class="text-muted">Tenant ID: <code>' + esc((configData.tenant && configData.tenant.id) || '?') + '</code></p><p class="text-muted">Branch ID: <code>' + esc((configData.tenant && configData.tenant.branch_id) || '?') + '</code></p></div>' +
+      '<div class="card"><h3 class="card-title mb-2">Acerca de</h3><p class="text-muted">TomaPedidos Print Agent</p><p class="text-muted">Versión: ' + esc((healthData && healthData.version) || '?') + '</p><p class="text-muted">Commit: ' + esc((healthData && healthData.commit) || '?') + '</p></div>';
 
     $('#s-save-pin').onclick = async function () {
       var pin = $('#s-pin').value.trim();
@@ -481,6 +483,15 @@
       try {
         await api('PUT', '/config', configData);
         toast('PIN actualizado', 'success');
+      } catch (e) { toast('Error: ' + e.message, 'error'); }
+    };
+
+    $('#s-save-callback').onclick = async function () {
+      var url = $('#s-callback').value.trim();
+      configData.callback_url = url;
+      try {
+        await api('PUT', '/config', configData);
+        toast(url ? 'Callback URL guardada' : 'Callback URL desactivada', 'success');
       } catch (e) { toast('Error: ' + e.message, 'error'); }
     };
   }
