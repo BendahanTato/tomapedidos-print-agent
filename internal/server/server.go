@@ -1,11 +1,14 @@
-// Package server wires the HTTP/WS API the cashier browser (and the
-// future local panel) will call. All endpoints bind to 127.0.0.1 only;
+// Package server wires the HTTP/WWSS API the cashier browser (and the
+// local web panel) will call. All endpoints bind to 127.0.0.1 only;
 // the agent is never reachable from the LAN or the public internet.
 package server
 
 import (
+	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"time"
@@ -16,8 +19,12 @@ import (
 	"github.com/tomapedidos/print-agent/internal/config"
 	"github.com/tomapedidos/print-agent/internal/printer"
 	"github.com/tomapedidos/print-agent/internal/queue"
-	"github.com/tomapedidos/print-agent/internal/version"
 )
+
+// webFS embeds the static panel assets (index.html, js/, css/).
+//
+//go:embed web
+var webFS embed.FS
 
 // Deps is the bundle of objects the HTTP handlers need. It is created
 // once at startup and passed to New().
@@ -27,6 +34,16 @@ type Deps struct {
 	Queue     *queue.Queue
 	Log       *slog.Logger
 	StartedAt time.Time
+}
+
+var panelSubFS fs.FS
+
+func init() {
+	var err error
+	panelSubFS, err = fs.Sub(webFS, "web")
+	if err != nil {
+		panic("embedded web/ not found: " + err.Error())
+	}
 }
 
 // New returns a chi router configured with every endpoint the agent
@@ -42,6 +59,11 @@ func New(d Deps) http.Handler {
 		d.StartedAt = time.Now()
 	}
 
+	// Auth endpoints (always accessible).
+	r.Post("/auth/login", authLoginHandler(d))
+	r.Post("/auth/logout", authLogoutHandler())
+
+	// Public endpoints (called by the SaaS browser, no PIN required).
 	r.Get("/health", healthHandler(d))
 	r.Get("/printers", listPrintersHandler(d))
 	r.Get("/printers/{id}", getPrinterHandler(d))
@@ -55,8 +77,18 @@ func New(d Deps) http.Handler {
 	r.Post("/jobs/{id}/reprint", reprintHandler(d))
 	r.Delete("/jobs/{id}", cancelJobHandler(d))
 
-	// Static panel placeholder. M5 ships the full SPA.
-	r.Get("/", rootHandler())
+	// Protected routes (require PIN via cookie).
+	r.Group(func(pr chi.Router) {
+		pr.Use(pinAuth(d))
+
+		pr.Get("/config", configGetHandler(d))
+		pr.Put("/config", configPutHandler(d))
+		pr.Get("/printers/detect", detectPrintersHandler(d))
+	})
+
+	// SPA panel — all unmatched routes fall back to index.html so
+	// the JS client-side router (pushState) works.
+	r.Handle("/*", http.FileServer(http.FS(panelSubFS)))
 
 	return r
 }
@@ -80,40 +112,103 @@ func requestLogger(log *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// rootHandler returns a minimal HTML page so the operator can browse to
-// the agent and confirm the service is running. M5 will replace this
-// with the full panel SPA.
-func rootHandler() http.HandlerFunc {
-	body := `<!doctype html>
-<html lang="es">
-<head>
-  <meta charset="utf-8">
-  <title>TomaPedidos Print Agent</title>
-  <style>
-    body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 4rem auto; padding: 0 1rem; color: #1f2937; }
-    h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
-    code { background: #f3f4f6; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
-    .meta { color: #6b7280; font-size: 0.875rem; }
-  </style>
-</head>
-<body>
-  <h1>TomaPedidos Print Agent</h1>
-  <p class="meta">` + version.String() + `</p>
-  <p>El panel completo llega en M5. Por ahora, los endpoints disponibles son:</p>
-  <ul>
-    <li><code>GET /health</code></li>
-    <li><code>GET /printers</code></li>
-    <li><code>POST /print</code></li>
-    <li><code>POST /print/batch</code></li>
-    <li><code>POST /cash-drawer/kick</code></li>
-    <li><code>GET /jobs</code></li>
-  </ul>
-</body>
-</html>`
+// authLoginHandler compares the PIN from the request body against
+// the configured panel.pin and sets a session cookie on success.
+func authLoginHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
+		var req struct {
+			PIN string `json:"pin"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PIN == "" {
+			writeError(w, http.StatusBadRequest, "invalid_payload", "pin is required")
+			return
+		}
+		expected := d.Config.Get().Panel.PIN
+		if expected == "" {
+			expected = "0000"
+		}
+		if req.PIN != expected {
+			writeError(w, http.StatusUnauthorized, "bad_pin", "")
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     "tpd_agent_session",
+			Value:    req.PIN,
+			Path:     "/",
+			MaxAge:   8 * 3600,
+			HttpOnly: false, // JS needs to know if we're logged in
+			SameSite: http.SameSiteLaxMode,
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+func authLogoutHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:   "tpd_agent_session",
+			Value:  "",
+			Path:   "/",
+			MaxAge: -1,
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+// pinAuth is a middleware that checks the session cookie against the
+// configured PIN. If no PIN is configured, the middleware allows
+// everything.
+func pinAuth(d Deps) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			expected := d.Config.Get().Panel.PIN
+			if expected == "" {
+				expected = "0000"
+			}
+			cookie, err := r.Cookie("tpd_agent_session")
+			if err != nil || cookie.Value != expected {
+				writeError(w, http.StatusUnauthorized, "unauthorized", "")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// configGetHandler returns the full active configuration.
+func configGetHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, d.Config.Get())
+	}
+}
+
+// configPutHandler replaces the in-memory configuration and persists it.
+func configPutHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var cfg config.Config
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_payload", err.Error())
+			return
+		}
+		if err := d.Config.Replace(cfg); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
+			return
+		}
+		d.Log.Info("config replaced via panel")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+// detectPrintersHandler scans the OS for installed printers and
+// returns the raw list for the panel to display in a dropdown.
+func detectPrintersHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		names, err := detectSystemPrinters(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "detect_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"printers": names})
 	}
 }
 
