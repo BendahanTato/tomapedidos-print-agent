@@ -47,6 +47,24 @@ func init() {
 	}
 }
 
+// corsMiddleware allows any origin. The agent binds exclusively to
+// 127.0.0.1 (loopback), so there is no exposure to the LAN or internet.
+// Any browser tab running on the same machine can call the agent,
+// including the tomaPedidos SaaS loaded from vercel.app.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // New returns a chi router configured with every endpoint the agent
 // exposes. The caller is responsible for http.ListenAndServe.
 func New(d Deps) http.Handler {
@@ -54,6 +72,7 @@ func New(d Deps) http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+	r.Use(corsMiddleware)
 	r.Use(requestLogger(d.Log))
 
 	if d.StartedAt.IsZero() {
