@@ -62,12 +62,13 @@ type Panel struct {
 
 // Config is the root of the JSON file.
 type Config struct {
-	Port     int       `json:"port"`
-	Bind     string    `json:"bind"`
-	Tenant   Tenant    `json:"tenant"`
-	Printers []Printer `json:"printers"`
-	Queue    Queue     `json:"queue"`
-	Panel    Panel     `json:"panel"`
+	Port        int       `json:"port"`
+	Bind        string    `json:"bind"`
+	Tenant      Tenant    `json:"tenant"`
+	Printers    []Printer `json:"printers"`
+	Queue       Queue     `json:"queue"`
+	Panel       Panel     `json:"panel"`
+	CallbackURL string    `json:"callback_url,omitempty"`
 }
 
 // Default returns a starter configuration that the agent writes on first

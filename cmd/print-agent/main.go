@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tomapedidos/print-agent/internal/callback"
 	"github.com/tomapedidos/print-agent/internal/config"
 	"github.com/tomapedidos/print-agent/internal/eventbus"
 	"github.com/tomapedidos/print-agent/internal/logging"
@@ -215,6 +216,10 @@ func runStart(args []string, stdout, stderr *os.File) {
 	}
 
 	bus := eventbus.New()
+
+	// Start callback sender if configured.
+	cbSender := callback.New(cfg.CallbackURL, bus, log)
+	defer cbSender.Stop()
 
 	q, err := queue.New(cfg.Queue.MaxRetries, cfg.Queue.DedupWindow, cfg.Queue.PersistPath, log, bus)
 	if err != nil {
