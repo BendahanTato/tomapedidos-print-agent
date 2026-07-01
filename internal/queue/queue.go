@@ -32,10 +32,13 @@ const (
 
 // Job is the unit of work submitted to the queue. Payload holds the
 // already-rendered ESC/POS bytes; the queue does not re-render.
+// Preview holds a plain-text representation of the ticket for display
+// in the web panel.
 type Job struct {
 	ID          string    `json:"id"`
 	PrinterID   string    `json:"printer_id"`
 	Payload     []byte    `json:"-"`
+	Preview     string    `json:"preview,omitempty"`
 	Bytes       int       `json:"bytes"`
 	Status      Status    `json:"status"`
 	Attempts    int       `json:"attempts"`
@@ -171,8 +174,9 @@ func (q *Queue) Wake() {
 
 // Submit enqueues a job for the given printer. If a job with the same ID
 // was accepted within the dedup window, ErrDuplicate is returned and the
-// new payload is discarded.
-func (q *Queue) Submit(printerID string, jobID string, payload []byte) (*Job, error) {
+// new payload is discarded. preview is an optional plain-text representation
+// of the ticket for display in the web panel.
+func (q *Queue) Submit(printerID string, jobID string, payload []byte, preview string) (*Job, error) {
 	if jobID == "" {
 		jobID = uuid.NewString()
 	}
@@ -205,6 +209,7 @@ func (q *Queue) Submit(printerID string, jobID string, payload []byte) (*Job, er
 		ID:          jobID,
 		PrinterID:   printerID,
 		Payload:     append([]byte(nil), payload...),
+		Preview:     preview,
 		Bytes:       len(payload),
 		Status:      StatusQueued,
 		Attempts:    0,

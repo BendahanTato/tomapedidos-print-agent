@@ -58,7 +58,7 @@ func reprintHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		// Resubmit with a fresh id (dedup window blocks the same id).
-		_, err := d.Queue.Submit(j.PrinterID, "", j.Payload)
+		_, err := d.Queue.Submit(j.PrinterID, "", j.Payload, j.Preview)
 		if err != nil && err.Error() != "queue: duplicate job" {
 			writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
@@ -86,6 +86,7 @@ type jobView struct {
 	ID          string `json:"id"`
 	PrinterID   string `json:"printer_id"`
 	Status      string `json:"status"`
+	Preview     string `json:"preview,omitempty"`
 	Bytes       int    `json:"bytes"`
 	Attempts    int    `json:"attempts"`
 	MaxAttempts int    `json:"max_attempts"`
@@ -103,6 +104,7 @@ func projectJob(j *queue.Job) *jobView {
 		ID:          j.ID,
 		PrinterID:   j.PrinterID,
 		Status:      string(j.Status),
+		Preview:     j.Preview,
 		Bytes:       j.Bytes,
 		Attempts:    j.Attempts,
 		MaxAttempts: j.MaxAttempts,

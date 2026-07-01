@@ -248,7 +248,7 @@
       detectedSection +
       '<div class="form-group"><label class="form-label">ID</label><input class="form-input" id="pf-id" value="' + esc(printer ? printer.id : '') + '" placeholder="cocina, caja, barra..."></div>' +
       '<div class="form-group"><label class="form-label">Nombre</label><input class="form-input" id="pf-name" value="' + esc(printer ? printer.name : '') + '" placeholder="Cocina"></div>' +
-      '<div class="form-group"><label class="form-label">Tipo</label><select class="form-select" id="pf-type"><option value="network">network (TCP 9100)</option><option value="usb">usb (spooler)</option><option value="file">file (debug)</option></select></div>' +
+      '<div class="form-group"><label class="form-label">Tipo</label><select class="form-select" id="pf-type"><option value="network">network (TCP 9100)</option><option value="usb">usb (spooler)</option><option value="usb-office">usb-office (spooler)</option><option value="file">file (debug)</option></select></div>' +
       '<div id="pf-net"><div class="form-group"><label class="form-label">Host</label><input class="form-input" id="pf-host" value="' + esc(printer ? printer.host || '' : '') + '" placeholder="192.168.1.30"></div><div class="form-group"><label class="form-label">Port</label><input class="form-input" id="pf-port" type="number" value="' + (printer ? printer.port || 9100 : 9100) + '"></div></div>' +
       '<div id="pf-usb" class="hidden"><div class="form-group"><label class="form-label">System Name</label><input class="form-input" id="pf-sysname" value="' + esc(printer ? printer.system_name || '' : '') + '" placeholder="EPSON_TM_T20III"></div></div>' +
       '<div id="pf-file" class="hidden"><div class="form-group"><label class="form-label">File Path</label><input class="form-input" id="pf-filepath" value="' + esc(printer ? printer.file_path || '' : '') + '" placeholder="/tmp/out.bin"></div></div>' +
@@ -284,18 +284,19 @@
 
     $('#pf-save').onclick = async function () {
       try {
+        var isOffice = $('#pf-type').value === 'usb-office';
         var cfg = await api('GET', '/config');
         var p = {
           id: $('#pf-id').value.trim(),
           name: $('#pf-name').value.trim(),
           type: $('#pf-type').value,
-          code_page: $('#pf-cp').value,
-          chars_per_line: parseInt($('#pf-cpl').value, 10) || 42,
-          cut: $('#pf-cut').value
+          code_page: isOffice ? '' : $('#pf-cp').value,
+          chars_per_line: isOffice ? 0 : (parseInt($('#pf-cpl').value, 10) || 42),
+          cut: isOffice ? '' : $('#pf-cut').value
         };
         if (!p.id) return toast('El ID es requerido', 'error');
         if (p.type === 'network') { p.host = $('#pf-host').value.trim(); p.port = parseInt($('#pf-port').value, 10) || 9100; }
-        if (p.type === 'usb') { p.system_name = $('#pf-sysname').value.trim(); }
+        if (p.type === 'usb' || p.type === 'usb-office') { p.system_name = $('#pf-sysname').value.trim(); }
         if (p.type === 'file') { p.file_path = $('#pf-filepath').value.trim(); }
 
         if (isEdit) {
@@ -315,8 +316,12 @@
   function togglePrinterFields() {
     var t = $('#pf-type').value;
     $('#pf-net').classList.toggle('hidden', t !== 'network');
-    $('#pf-usb').classList.toggle('hidden', t !== 'usb');
+    $('#pf-usb').classList.toggle('hidden', t !== 'usb' && t !== 'usb-office');
     $('#pf-file').classList.toggle('hidden', t !== 'file');
+    var isOffice = t === 'usb-office';
+    $('#pf-cp').closest('.form-group').classList.toggle('hidden', isOffice);
+    $('#pf-cpl').closest('.form-group').classList.toggle('hidden', isOffice);
+    $('#pf-cut').closest('.form-group').classList.toggle('hidden', isOffice);
   }
 
   async function editPrinter(id) {
@@ -400,7 +405,8 @@
       v.innerHTML += '<div class="card overflow-x"><table class="data-table"><thead><tr><th>ID</th><th>Printer</th><th>Status</th><th>Bytes</th><th>Att</th><th>Created</th><th></th></tr></thead><tbody>' + jobs.map(function (j) {
         var cls = j.status === 'failed' ? 'red' : j.status === 'printed' ? 'green' : j.status === 'cancelled' ? 'amber' : '';
         var ca = j.created_at ? new Date(j.created_at).toLocaleString() : '—';
-        return '<tr><td class="text-mono" style="max-width:100px;overflow:hidden;text-overflow:ellipsis" title="' + esc(j.id) + '">' + esc(j.id.slice(0, 12)) + '…</td><td>' + esc(j.printer_id) + '</td><td><span class="badge badge-' + cls + '">' + esc(j.status) + '</span></td><td>' + (j.bytes || 0) + '</td><td>' + (j.attempts || 0) + '/' + (j.max_attempts || 1) + '</td><td>' + ca + '</td><td><div class="flex gap-1"><button class="btn btn-sm reprint-btn" data-id="' + esc(j.id) + '">Reprint</button><button class="btn btn-sm btn-danger cancel-btn" data-id="' + esc(j.id) + '">Cancel</button></div></td></tr>';
+        var previewBtn = j.preview ? '<button class="btn btn-sm preview-btn" data-id="' + esc(j.id) + '">Ver</button>' : '';
+        return '<tr class="job-row" data-id="' + esc(j.id) + '" style="cursor:pointer"><td class="text-mono" style="max-width:100px;overflow:hidden;text-overflow:ellipsis" title="' + esc(j.id) + '">' + esc(j.id.slice(0, 12)) + '…</td><td>' + esc(j.printer_id) + '</td><td><span class="badge badge-' + cls + '">' + esc(j.status) + '</span></td><td>' + (j.bytes || 0) + '</td><td>' + (j.attempts || 0) + '/' + (j.max_attempts || 1) + '</td><td>' + ca + '</td><td><div class="flex gap-1">' + previewBtn + '<button class="btn btn-sm reprint-btn" data-id="' + esc(j.id) + '">Reprint</button><button class="btn btn-sm btn-danger cancel-btn" data-id="' + esc(j.id) + '">Cancel</button></div></td></tr>';
       }).join('') + '</tbody></table></div>';
     }
 
@@ -409,8 +415,36 @@
       jobsFilter = this.value;
       renderJobs();
     };
-    $$('.reprint-btn').forEach(function (b) { b.onclick = function () { reprintJob(b.dataset.id); }; });
-    $$('.cancel-btn').forEach(function (b) { b.onclick = function () { cancelJob(b.dataset.id); }; });
+    $$('.reprint-btn').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); reprintJob(b.dataset.id); }; });
+    $$('.cancel-btn').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); cancelJob(b.dataset.id); }; });
+    $$('.preview-btn').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); showPreview(b.dataset.id); }; });
+    $$('.job-row').forEach(function (row) {
+      row.onclick = function () {
+        var id = row.dataset.id;
+        var job = jobs.find(function (j) { return j.id === id; });
+        if (job && job.preview) showPreview(id);
+      };
+    });
+  }
+
+  function showPreview(id) {
+    var job = null;
+    try {
+      var allJobs = (JSON.parse(document.querySelector('#view-jobs .data-table') ? '[]' : '[]'));
+    } catch (_) {}
+    fetch('/jobs/' + id).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.preview) { toast('Sin preview disponible', 'warn'); return; }
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.id = 'preview-modal';
+      overlay.innerHTML = '<div class="modal" style="max-width:480px"><div class="modal-header"><span class="modal-title">Preview — ' + esc(j.printer_id) + '</span><button class="modal-close">&times;</button></div>' +
+        '<div class="card" style="margin:0"><pre style="white-space:pre-wrap;font-family:monospace;font-size:13px;line-height:1.5;margin:0;background:#1a1a2e;color:#e0e0e0;padding:1rem;border-radius:6px;max-height:400px;overflow-y:auto">' + esc(j.preview) + '</pre></div>' +
+        '<div class="modal-footer"><button class="btn" id="pv-close">Cerrar</button></div></div>';
+      document.body.appendChild(overlay);
+      overlay.querySelector('.modal-close').onclick = function () { overlay.remove(); };
+      overlay.querySelector('#pv-close').onclick = function () { overlay.remove(); };
+      overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
+    }).catch(function () { toast('Error al cargar preview', 'error'); });
   }
 
   async function reprintJob(id) {

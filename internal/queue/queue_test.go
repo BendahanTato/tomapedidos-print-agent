@@ -17,7 +17,7 @@ func newMemQueue(maxRetries int, dedupTTL time.Duration) *Queue {
 
 func TestSubmitPopPrint(t *testing.T) {
 	q := newMemQueue(0, 0)
-	job, err := q.Submit("p1", "j1", []byte("hello"))
+	job, err := q.Submit("p1", "j1", []byte("hello"), "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -49,8 +49,8 @@ func TestSubmitPopPrint(t *testing.T) {
 
 func TestSubmitDedup(t *testing.T) {
 	q := newMemQueue(0, time.Minute)
-	_, _ = q.Submit("p1", "j1", []byte("a"))
-	_, err := q.Submit("p1", "j1", []byte("b"))
+	_, _ = q.Submit("p1", "j1", []byte("a"), "")
+	_, err := q.Submit("p1", "j1", []byte("b"), "")
 	if !errors.Is(err, ErrDuplicate) {
 		t.Errorf("expected ErrDuplicate, got %v", err)
 	}
@@ -58,7 +58,7 @@ func TestSubmitDedup(t *testing.T) {
 
 func TestRetryRequeue(t *testing.T) {
 	q := newMemQueue(2, 0) // maxRetries=2 → MaxAttempts=3
-	job, _ := q.Submit("p1", "j1", []byte("x"))
+	job, _ := q.Submit("p1", "j1", []byte("x"), "")
 	for i := 1; i <= 3; i++ {
 		got := q.Pop("p1")
 		if got == nil {
@@ -81,7 +81,7 @@ func TestRetryRequeue(t *testing.T) {
 
 func TestFailedJobStaysForInspection(t *testing.T) {
 	q := newMemQueue(1, time.Minute) // maxRetries=1 → MaxAttempts=2
-	_, _ = q.Submit("p1", "j1", []byte("x"))
+	_, _ = q.Submit("p1", "j1", []byte("x"), "")
 	got := q.Pop("p1")
 	q.MarkFailed(got, "boom")
 	got = q.Pop("p1")
@@ -100,7 +100,7 @@ func TestFailedJobStaysForInspection(t *testing.T) {
 
 func TestCancel(t *testing.T) {
 	q := newMemQueue(0, 0)
-	_, _ = q.Submit("p1", "j1", []byte("x"))
+	_, _ = q.Submit("p1", "j1", []byte("x"), "")
 	j, ok := q.Cancel("j1")
 	if !ok {
 		t.Fatalf("Cancel: not found")
@@ -117,7 +117,7 @@ func TestCancel(t *testing.T) {
 func TestListOrder(t *testing.T) {
 	q := newMemQueue(0, 0)
 	for i := 0; i < 3; i++ {
-		_, _ = q.Submit("p1", "id-"+string(rune('a'+i)), []byte("x"))
+		_, _ = q.Submit("p1", "id-"+string(rune('a'+i)), []byte("x"), "")
 		time.Sleep(2 * time.Millisecond)
 	}
 	all := q.List(0, "")

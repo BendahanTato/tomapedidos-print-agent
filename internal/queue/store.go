@@ -36,6 +36,7 @@ func (s *store) migrate() error {
 		id            TEXT PRIMARY KEY,
 		printer_id    TEXT    NOT NULL,
 		payload       BLOB    NOT NULL,
+		preview       TEXT    DEFAULT '',
 		bytes         INTEGER NOT NULL DEFAULT 0,
 		status        TEXT    NOT NULL DEFAULT 'queued',
 		attempts      INTEGER NOT NULL DEFAULT 0,
@@ -53,7 +54,12 @@ func (s *store) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_jobs_printer ON jobs(printer_id, status);
 	`
 	_, err := s.db.Exec(ddl)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migration: add preview column if missing (for existing databases).
+	s.db.Exec(`ALTER TABLE jobs ADD COLUMN preview TEXT DEFAULT ''`)
+	return nil
 }
 
 func (s *store) close() error {
@@ -67,12 +73,12 @@ func (s *store) close() error {
 // insertJob writes a new job row.
 func (s *store) insertJob(j *Job) error {
 	const q = `
-	INSERT INTO jobs (id, printer_id, payload, bytes, status, attempts,
+	INSERT INTO jobs (id, printer_id, payload, preview, bytes, status, attempts,
 		max_attempts, last_error, created_at_ms, started_at_ms, finished_at_ms)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err := s.db.Exec(q,
-		j.ID, j.PrinterID, j.Payload, j.Bytes, string(j.Status),
+		j.ID, j.PrinterID, j.Payload, j.Preview, j.Bytes, string(j.Status),
 		j.Attempts, j.MaxAttempts, j.LastError,
 		millis(j.CreatedAt), millis(j.StartedAt), millis(j.FinishedAt),
 	)
@@ -104,7 +110,7 @@ func (s *store) deleteJob(id string) error {
 // Jobs left in 'printing' are reset to 'queued'.
 func (s *store) loadActive() ([]*Job, error) {
 	rows, err := s.db.Query(
-		`SELECT id, printer_id, payload, bytes, status, attempts, max_attempts,
+		`SELECT id, printer_id, payload, preview, bytes, status, attempts, max_attempts,
 			last_error, created_at_ms, started_at_ms, finished_at_ms
 		 FROM jobs
 		 WHERE status IN ('queued','printing')
@@ -120,7 +126,7 @@ func (s *store) loadActive() ([]*Job, error) {
 		var status string
 		var ca, sa, fa int64
 		if err := rows.Scan(
-			&j.ID, &j.PrinterID, &j.Payload, &j.Bytes, &status,
+			&j.ID, &j.PrinterID, &j.Payload, &j.Preview, &j.Bytes, &status,
 			&j.Attempts, &j.MaxAttempts, &j.LastError,
 			&ca, &sa, &fa,
 		); err != nil {
@@ -145,11 +151,11 @@ func (s *store) loadByID(id string) (*Job, bool) {
 	var status string
 	var ca, sa, fa int64
 	err := s.db.QueryRow(
-		`SELECT id, printer_id, payload, bytes, status, attempts, max_attempts,
+		`SELECT id, printer_id, payload, preview, bytes, status, attempts, max_attempts,
 			last_error, created_at_ms, started_at_ms, finished_at_ms
 		 FROM jobs WHERE id=?`, id,
 	).Scan(
-		&j.ID, &j.PrinterID, &j.Payload, &j.Bytes, &status,
+		&j.ID, &j.PrinterID, &j.Payload, &j.Preview, &j.Bytes, &status,
 		&j.Attempts, &j.MaxAttempts, &j.LastError,
 		&ca, &sa, &fa,
 	)
@@ -170,13 +176,13 @@ func (s *store) listStored(limit int, statusFilter Status) []*Job {
 	var err error
 	if statusFilter == "" {
 		rows, err = s.db.Query(
-			`SELECT id, printer_id, payload, bytes, status, attempts, max_attempts,
+			`SELECT id, printer_id, payload, preview, bytes, status, attempts, max_attempts,
 				last_error, created_at_ms, started_at_ms, finished_at_ms
 			 FROM jobs ORDER BY created_at_ms DESC LIMIT ?`, limit,
 		)
 	} else {
 		rows, err = s.db.Query(
-			`SELECT id, printer_id, payload, bytes, status, attempts, max_attempts,
+			`SELECT id, printer_id, payload, preview, bytes, status, attempts, max_attempts,
 				last_error, created_at_ms, started_at_ms, finished_at_ms
 			 FROM jobs WHERE status=? ORDER BY created_at_ms DESC LIMIT ?`,
 			string(statusFilter), limit,
@@ -192,7 +198,7 @@ func (s *store) listStored(limit int, statusFilter Status) []*Job {
 		var st string
 		var ca, sa, fa int64
 		if err := rows.Scan(
-			&j.ID, &j.PrinterID, &j.Payload, &j.Bytes, &st,
+			&j.ID, &j.PrinterID, &j.Payload, &j.Preview, &j.Bytes, &st,
 			&j.Attempts, &j.MaxAttempts, &j.LastError,
 			&ca, &sa, &fa,
 		); err != nil {

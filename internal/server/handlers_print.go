@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/tomapedidos/print-agent/internal/escpos"
 	"github.com/tomapedidos/print-agent/internal/printer"
@@ -166,7 +167,8 @@ func submitJob(d Deps, req PrintJob) (*queue.Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	job, err := d.Queue.Submit(req.PrinterID, req.JobID, payload)
+	preview := renderPreview(req)
+	job, err := d.Queue.Submit(req.PrinterID, req.JobID, payload, preview)
 	if err != nil {
 		// ErrDuplicate is fine; return the existing job so the caller
 		// knows the print was already accepted.
@@ -179,6 +181,9 @@ func submitJob(d Deps, req PrintJob) (*queue.Job, error) {
 // default kitchen template. M5 will dispatch on req.Template for cash
 // and receipt templates.
 func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
+	if info.Type == "usb-office" {
+		return renderOfficePlainText(req)
+	}
 	codePage := info.CodePage
 	if codePage == "" {
 		codePage = "cp850"
@@ -194,9 +199,6 @@ func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
 		Address:       req.Header.CustomerAddress,
 		DeliveryType:  req.Header.DeliveryType,
 		PaymentMethod: req.Header.PaymentMethod,
-		// CreatedAt is left zero on purpose: the renderer formats
-		// time.Time; if M5 needs the exact creation timestamp it
-		// can be added here.
 	}
 	items := make([]escpos.Item, 0, len(req.Items))
 	for _, it := range req.Items {
@@ -217,4 +219,70 @@ func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
 		FeedLinesBefore: req.Options.FeedLinesBefore,
 	}
 	return escpos.RenderKitchen(codePage, chars, header, items, opts)
+}
+
+func renderOfficePlainText(req PrintJob) ([]byte, error) {
+	header := escpos.Header{
+		OrderNumber:   req.Header.OrderNumber,
+		CustomerName:  req.Header.CustomerName,
+		CustomerPhone: req.Header.CustomerPhone,
+		Address:       req.Header.CustomerAddress,
+		DeliveryType:  req.Header.DeliveryType,
+		PaymentMethod: req.Header.PaymentMethod,
+	}
+	items := make([]escpos.Item, 0, len(req.Items))
+	for _, it := range req.Items {
+		items = append(items, escpos.Item{
+			Qty:       it.Qty,
+			Name:      it.Name,
+			Modifiers: it.Modifiers,
+			Notes:     it.Notes,
+			UnitPrice: it.UnitPrice,
+			Subtotal:  it.Subtotal,
+		})
+	}
+	opts := escpos.Options{
+		Copies: req.Options.Copies,
+	}
+	return escpos.RenderKitchenPlainText(header, items, opts)
+}
+
+// renderPreview produces a plain-text representation of the ticket for
+// display in the web panel jobs view.
+func renderPreview(req PrintJob) string {
+	header := escpos.Header{
+		OrderNumber:   req.Header.OrderNumber,
+		CustomerName:  req.Header.CustomerName,
+		CustomerPhone: req.Header.CustomerPhone,
+		Address:       req.Header.CustomerAddress,
+		DeliveryType:  req.Header.DeliveryType,
+		PaymentMethod: req.Header.PaymentMethod,
+		CreatedAt:     parseTime(req.Header.CreatedAt),
+	}
+	items := make([]escpos.Item, 0, len(req.Items))
+	for _, it := range req.Items {
+		items = append(items, escpos.Item{
+			Qty:       it.Qty,
+			Name:      it.Name,
+			Modifiers: it.Modifiers,
+			Notes:     it.Notes,
+		})
+	}
+	opts := escpos.Options{Copies: req.Options.Copies}
+	b, err := escpos.RenderKitchenPlainText(header, items, opts)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func parseTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }

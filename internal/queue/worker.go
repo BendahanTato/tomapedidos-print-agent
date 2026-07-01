@@ -34,11 +34,14 @@ func NewWorker(printerID string, q *Queue, reg *printer.Registry, cfg config.Que
 
 // Run blocks until ctx is cancelled. It is safe to call exactly once.
 func (w *Worker) Run(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-w.queue.Notify():
+		case <-ticker.C:
 		}
 		w.drain(ctx)
 	}

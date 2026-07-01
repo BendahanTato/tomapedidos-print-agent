@@ -1,6 +1,7 @@
 package escpos
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"time"
@@ -144,6 +145,93 @@ func RenderKitchen(codePage string, charsPerLine int, h Header, items []Item, op
 		return repeat, nil
 	}
 	return out, nil
+}
+
+// RenderKitchenPlainText produces plain-text bytes for office/laser printers.
+// The layout mirrors RenderKitchen but uses only printable ASCII characters
+// and CRLF line endings — no ESC/POS commands, code pages, or cut directives.
+func RenderKitchenPlainText(h Header, items []Item, opts Options) ([]byte, error) {
+	if len(items) == 0 {
+		return nil, ErrEmptyPayload
+	}
+	width := 42
+	b := &bytes.Buffer{}
+
+	crlf := func() {
+		b.WriteByte('\r')
+		b.WriteByte('\n')
+	}
+
+	center := func(s string) {
+		runes := []rune(s)
+		if len(runes) >= width {
+			b.WriteString(s)
+			crlf()
+			return
+		}
+		pad := (width - len(runes)) / 2
+		for i := 0; i < pad; i++ {
+			b.WriteByte(' ')
+		}
+		b.WriteString(s)
+		crlf()
+	}
+
+	sep := func() {
+		for i := 0; i < width; i++ {
+			b.WriteByte('=')
+		}
+		crlf()
+	}
+
+	line := func(s string) {
+		b.WriteString(s)
+		crlf()
+	}
+
+	// Header
+	sep()
+	center(fmt.Sprintf("PEDIDO #%d", h.OrderNumber))
+
+	if t := formatTime(h.CreatedAt); t != "" {
+		center(t)
+	}
+	if d := deliveryLabel(h.DeliveryType); d != "" {
+		center(d)
+	}
+	sep()
+
+	if h.CustomerName != "" {
+		line("Cliente: " + h.CustomerName)
+	}
+	if h.CustomerPhone != "" {
+		line("Tel: " + h.CustomerPhone)
+	}
+	if h.Address != "" {
+		line("Dir: " + h.Address)
+	}
+	sep()
+
+	for _, it := range items {
+		line(fmt.Sprintf("%s %s", formatQty(it.Qty), truncate(it.Name, width-4)))
+		for _, m := range it.Modifiers {
+			line("  - " + m)
+		}
+		if it.Notes != "" {
+			line("  OBS: " + it.Notes)
+		}
+	}
+	sep()
+
+	if opts.Copies > 1 {
+		content := b.Bytes()
+		repeat := make([]byte, 0, len(content)*opts.Copies)
+		for i := 0; i < opts.Copies; i++ {
+			repeat = append(repeat, content...)
+		}
+		return repeat, nil
+	}
+	return b.Bytes(), nil
 }
 
 // truncate returns s shortened to at most n runes, with an ellipsis if it

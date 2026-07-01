@@ -19,7 +19,7 @@ func TestPersistSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	j1, err := q1.Submit("printer-a", "persist-1", []byte("payload-1"))
+	j1, err := q1.Submit("printer-a", "persist-1", []byte("payload-1"), "preview-1")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestPersistInMemoryFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = q.Submit("p1", "j1", []byte("x"))
+	_, err = q.Submit("p1", "j1", []byte("x"), "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -100,14 +100,14 @@ func TestPersistDedupAcrossRestarts(t *testing.T) {
 
 	// First life: submit and finish a job.
 	q1, _ := New(1, time.Hour, dbPath, nil, nil)
-	q1.Submit("p1", "dedup-99", []byte("a"))
+	q1.Submit("p1", "dedup-99", []byte("a"), "")
 	popped := q1.Pop("p1")
 	q1.MarkPrinted(popped)
 	_ = q1.Close()
 
 	// Second life: same job_id should still be dedup'd.
 	q2, _ := New(1, time.Hour, dbPath, nil, nil)
-	_, err := q2.Submit("p1", "dedup-99", []byte("b"))
+	_, err := q2.Submit("p1", "dedup-99", []byte("b"), "")
 	if !os.IsTimeout(nil) && err != ErrDuplicate {
 		// Actually check properly.
 		if err != ErrDuplicate {

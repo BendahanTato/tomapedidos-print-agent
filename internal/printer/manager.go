@@ -49,7 +49,7 @@ func NewFromConfig(ctx context.Context, p config.Printer) (Printer, Info, error)
 		}
 		info.Status = StatusOnline
 		return fp, info, nil
-	case "usb":
+	case "usb", "usb-office":
 		up := NewUSB(p.ID, p.SystemName)
 		if err := up.Open(ctx); err != nil {
 			info.Status = StatusOffline
