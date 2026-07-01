@@ -50,6 +50,7 @@ type Queue struct {
 	RetryBackoffMs []int         `json:"retry_backoff_ms"`
 	DedupWindow    time.Duration `json:"-"`
 	DedupWindowMs  int           `json:"dedup_window_ms"`
+	PersistPath    string        `json:"persist_path"` // SQLite path; empty = in-memory only
 }
 
 // Panel is the local web panel configuration.
@@ -94,6 +95,7 @@ func Default() Config {
 			MaxRetries:     3,
 			RetryBackoffMs: []int{1000, 3000, 10000},
 			DedupWindowMs:  300000,
+			PersistPath:    "./data/jobs.db",
 		},
 		Panel: Panel{
 			Enabled: true,

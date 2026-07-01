@@ -27,7 +27,7 @@ del SO) o un archivo de debug.
 |---|---|---|
 | M1 | hecho | Agente mínimo con red + file + queue + retries |
 | M2 | hecho | USB vía spooler del OS (CUPS en Unix, print /d: en Windows) |
-| M3 | pendiente | Cola persistente con SQLite |
+| M3 | hecho | Cola persistente con SQLite (modernc.org/sqlite, CGO-free) |
 | M4 | pendiente | Persistencia y hot reload de config |
 | M5 | pendiente | Panel web completo (login, CRUD, dashboard) |
 | M6 | pendiente | WebSocket `/events` para status en vivo |

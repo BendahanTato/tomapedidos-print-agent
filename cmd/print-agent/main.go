@@ -197,7 +197,12 @@ func runStart(args []string, stdout, stderr *os.File) {
 		}
 	}
 
-	q := queue.New(cfg.Queue.MaxRetries, cfg.Queue.DedupWindow)
+	q, err := queue.New(cfg.Queue.MaxRetries, cfg.Queue.DedupWindow, cfg.Queue.PersistPath, log)
+	if err != nil {
+		log.Error("queue init failed", slog.String("error", err.Error()))
+		fmt.Fprintf(stderr, "queue init failed: %v\n", err)
+		os.Exit(1)
+	}
 	for id := range reg.Printers() {
 		reg.SetQueueDepth(id, 0)
 	}

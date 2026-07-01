@@ -6,8 +6,17 @@ import (
 	"time"
 )
 
+// helper — creates an in-memory queue (no persistence).
+func newMemQueue(maxRetries int, dedupTTL time.Duration) *Queue {
+	q, err := New(maxRetries, dedupTTL, "", nil)
+	if err != nil {
+		panic(err)
+	}
+	return q
+}
+
 func TestSubmitPopPrint(t *testing.T) {
-	q := New(0, 0)
+	q := newMemQueue(0, 0)
 	job, err := q.Submit("p1", "j1", []byte("hello"))
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
@@ -39,7 +48,7 @@ func TestSubmitPopPrint(t *testing.T) {
 }
 
 func TestSubmitDedup(t *testing.T) {
-	q := New(0, time.Minute)
+	q := newMemQueue(0, time.Minute)
 	_, _ = q.Submit("p1", "j1", []byte("a"))
 	_, err := q.Submit("p1", "j1", []byte("b"))
 	if !errors.Is(err, ErrDuplicate) {
@@ -48,7 +57,7 @@ func TestSubmitDedup(t *testing.T) {
 }
 
 func TestRetryRequeue(t *testing.T) {
-	q := New(2, 0) // maxRetries=2 → MaxAttempts=3
+	q := newMemQueue(2, 0) // maxRetries=2 → MaxAttempts=3
 	job, _ := q.Submit("p1", "j1", []byte("x"))
 	for i := 1; i <= 3; i++ {
 		got := q.Pop("p1")
@@ -64,7 +73,6 @@ func TestRetryRequeue(t *testing.T) {
 			q.MarkPrinted(got)
 		}
 	}
-	// After 3 attempts (max) and MarkPrinted, job is gone.
 	_, ok := q.Get(job.ID)
 	if ok {
 		t.Errorf("expected job to be evicted from dedup map after success")
@@ -72,18 +80,15 @@ func TestRetryRequeue(t *testing.T) {
 }
 
 func TestFailedJobStaysForInspection(t *testing.T) {
-	q := New(1, time.Minute) // maxRetries=1 → MaxAttempts=2
+	q := newMemQueue(1, time.Minute) // maxRetries=1 → MaxAttempts=2
 	_, _ = q.Submit("p1", "j1", []byte("x"))
-	// first attempt fails
 	got := q.Pop("p1")
 	q.MarkFailed(got, "boom")
-	// second attempt fails
 	got = q.Pop("p1")
 	if got == nil {
 		t.Fatalf("second Pop returned nil")
 	}
 	q.MarkFailed(got, "boom again")
-	// Job is now in failed state; Get must return it so /jobs/:id works.
 	j, ok := q.Get("j1")
 	if !ok {
 		t.Fatalf("expected failed job to remain in dedup map")
@@ -94,7 +99,7 @@ func TestFailedJobStaysForInspection(t *testing.T) {
 }
 
 func TestCancel(t *testing.T) {
-	q := New(0, 0)
+	q := newMemQueue(0, 0)
 	_, _ = q.Submit("p1", "j1", []byte("x"))
 	j, ok := q.Cancel("j1")
 	if !ok {
@@ -103,7 +108,6 @@ func TestCancel(t *testing.T) {
 	if j.Status != StatusCancelled {
 		t.Errorf("Status = %q, want cancelled", j.Status)
 	}
-	// Cancelling a second time is a no-op.
 	_, ok = q.Cancel("j1")
 	if ok {
 		t.Errorf("second Cancel should report no change")
@@ -111,10 +115,10 @@ func TestCancel(t *testing.T) {
 }
 
 func TestListOrder(t *testing.T) {
-	q := New(0, 0)
+	q := newMemQueue(0, 0)
 	for i := 0; i < 3; i++ {
 		_, _ = q.Submit("p1", "id-"+string(rune('a'+i)), []byte("x"))
-		time.Sleep(2 * time.Millisecond) // ensure CreatedAt differs
+		time.Sleep(2 * time.Millisecond)
 	}
 	all := q.List(0, "")
 	if len(all) != 3 {
