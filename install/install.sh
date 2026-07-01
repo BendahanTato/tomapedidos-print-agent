@@ -54,7 +54,19 @@ with open('${CONFIG}', 'w') as f: json.dump(cfg, f, indent=2)
 fi
 
 echo "=== registering as a service"
+WAS_RUNNING=false
+if "${BIN}" status-svc >/dev/null 2>&1; then
+  WAS_RUNNING=true
+  echo "=== service was running, will restart after update"
+  "${BIN}" stop-svc || true
+fi
+
 "${BIN}" install --config "${CONFIG}"
+
+if [ "${WAS_RUNNING}" = true ]; then
+  echo "=== restarting service with new version"
+  "${BIN}" start-svc
+fi
 
 echo "=== done"
 echo "Agent installed as a service and started."
