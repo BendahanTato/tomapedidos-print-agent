@@ -39,6 +39,7 @@ import (
 	"github.com/tomapedidos/print-agent/internal/printer"
 	"github.com/tomapedidos/print-agent/internal/queue"
 	"github.com/tomapedidos/print-agent/internal/server"
+	"github.com/tomapedidos/print-agent/internal/service"
 	"github.com/tomapedidos/print-agent/internal/version"
 )
 
@@ -61,6 +62,16 @@ func main() {
 		runDoctor(os.Args[2:])
 	case "start":
 		runStart(os.Args[2:], os.Stdout, os.Stderr)
+	case "install":
+		runServiceInstall(os.Args[2:])
+	case "uninstall":
+		runServiceUninstall(os.Args[2:])
+	case "start-svc":
+		runServiceStart(os.Args[2:])
+	case "stop-svc":
+		runServiceStop(os.Args[2:])
+	case "status-svc":
+		runServiceStatus(os.Args[2:])
 	case "help", "--help", "-h":
 		printHelp()
 	default:
@@ -84,6 +95,11 @@ Subcommands:
   init-config [path]     Write a starter config to path.
   doctor                 Print environment diagnostics.
   help                   Print this help.
+  install   [--config]   Install as OS service (launchd / systemd / SCM).
+  uninstall              Remove OS service registration.
+  start-svc              Start the installed service.
+  stop-svc               Stop the running service.
+  status-svc             Print the service state.
 
 Flags for start:
   --config <path>        Path to config JSON (default ./configs/printers.json)
@@ -252,4 +268,53 @@ func runStart(args []string, stdout, stderr *os.File) {
 		os.Exit(1)
 	}
 	log.Info("bye")
+}
+
+// ---------------------------------------------------------------------------
+// Service subcommands (M7: launchd / systemd / SCM)
+// ---------------------------------------------------------------------------
+
+func runServiceInstall(args []string) {
+	fs := flag.NewFlagSet("install", flag.ExitOnError)
+	configPath := fs.String("config", defaultConfigPath, "path to config JSON")
+	_ = fs.Parse(args)
+	exe, _ := os.Executable()
+	if err := service.New().Install(exe, *configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("service installed")
+}
+
+func runServiceUninstall(_ []string) {
+	if err := service.New().Uninstall(); err != nil {
+		fmt.Fprintf(os.Stderr, "uninstall failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("service uninstalled")
+}
+
+func runServiceStart(_ []string) {
+	if err := service.New().Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "start failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("service started")
+}
+
+func runServiceStop(_ []string) {
+	if err := service.New().Stop(); err != nil {
+		fmt.Fprintf(os.Stderr, "stop failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("service stopped")
+}
+
+func runServiceStatus(_ []string) {
+	s, err := service.New().Status()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "status check failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(s)
 }
