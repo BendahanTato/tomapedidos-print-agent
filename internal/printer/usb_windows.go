@@ -3,6 +3,7 @@
 package printer
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -80,4 +81,9 @@ func (p *USBPrinter) checkExists(ctx context.Context) error {
 		return fmt.Errorf("Get-Printer %s: %w%s", p.systemName, err, formatStderr(out))
 	}
 	return nil
+}
+
+func formatStderr(out []byte) string {
+	if len(out) == 0 { return "" }
+	return ": " + string(bytes.TrimSpace(out))
 }
