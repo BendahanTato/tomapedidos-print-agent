@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tomapedidos/print-agent/internal/config"
+	"github.com/tomapedidos/print-agent/internal/eventbus"
 )
 
 // NewFromConfig instantiates the right concrete Printer for a given
@@ -63,9 +64,9 @@ func NewFromConfig(ctx context.Context, p config.Printer) (Printer, Info, error)
 }
 
 // Heartbeat runs Ping on every registered printer in a loop. It updates
-// the Status field in the registry at the supplied interval. The loop
-// exits when ctx is cancelled.
-func Heartbeat(ctx context.Context, reg *Registry, log *slog.Logger, every time.Duration) {
+// the Status field in the registry at the supplied interval and publishes
+// eventbus events when a printer goes offline or comes back online.
+func Heartbeat(ctx context.Context, reg *Registry, log *slog.Logger, every time.Duration, bus *eventbus.Bus) {
 	if every <= 0 {
 		every = 10 * time.Second
 	}
@@ -77,14 +78,24 @@ func Heartbeat(ctx context.Context, reg *Registry, log *slog.Logger, every time.
 			return
 		case <-t.C:
 			for id, p := range reg.Printers() {
+				info, _ := reg.Get(id)
+				prevStatus := info.Status
 				if err := p.Ping(ctx); err != nil {
 					reg.SetStatus(id, StatusOffline, err.Error())
 					if log != nil {
 						log.Warn("printer ping failed", slog.String("printer", id), slog.String("error", err.Error()))
 					}
-					continue
+				} else {
+					reg.SetStatus(id, StatusOnline, "")
 				}
-				reg.SetStatus(id, StatusOnline, "")
+				newInfo, _ := reg.Get(id)
+				if bus != nil && prevStatus != newInfo.Status {
+					bus.Publish(eventbus.Event{
+						Type:    "printer.status_changed",
+						Printer: id,
+						Status:  string(newInfo.Status),
+					})
+				}
 			}
 		}
 	}

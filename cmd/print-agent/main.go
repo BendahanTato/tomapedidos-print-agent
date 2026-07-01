@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/tomapedidos/print-agent/internal/config"
+	"github.com/tomapedidos/print-agent/internal/eventbus"
 	"github.com/tomapedidos/print-agent/internal/logging"
 	"github.com/tomapedidos/print-agent/internal/printer"
 	"github.com/tomapedidos/print-agent/internal/queue"
@@ -197,7 +198,9 @@ func runStart(args []string, stdout, stderr *os.File) {
 		}
 	}
 
-	q, err := queue.New(cfg.Queue.MaxRetries, cfg.Queue.DedupWindow, cfg.Queue.PersistPath, log)
+	bus := eventbus.New()
+
+	q, err := queue.New(cfg.Queue.MaxRetries, cfg.Queue.DedupWindow, cfg.Queue.PersistPath, log, bus)
 	if err != nil {
 		log.Error("queue init failed", slog.String("error", err.Error()))
 		fmt.Fprintf(stderr, "queue init failed: %v\n", err)
@@ -211,12 +214,13 @@ func runStart(args []string, stdout, stderr *os.File) {
 	go queue.NewPool(q, reg, cfg.Queue, log).Run(ctx)
 
 	// Heartbeat keeps Status fresh.
-	go printer.Heartbeat(ctx, reg, log, 10*time.Second)
+	go printer.Heartbeat(ctx, reg, log, 10*time.Second, bus)
 
 	mux := server.New(server.Deps{
 		Config:    cfgStore,
 		Registry:  reg,
 		Queue:     q,
+		EventBus:  bus,
 		Log:       log,
 		StartedAt: time.Now(),
 	})

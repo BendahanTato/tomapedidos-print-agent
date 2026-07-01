@@ -8,7 +8,7 @@ import (
 
 // helper — creates an in-memory queue (no persistence).
 func newMemQueue(maxRetries int, dedupTTL time.Duration) *Queue {
-	q, err := New(maxRetries, dedupTTL, "", nil)
+	q, err := New(maxRetries, dedupTTL, "", nil, nil)
 	if err != nil {
 		panic(err)
 	}

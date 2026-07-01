@@ -30,7 +30,7 @@ del SO) o un archivo de debug.
 | M3 | hecho | Cola persistente con SQLite (modernc.org/sqlite, CGO-free) |
 | M4 | pendiente | Persistencia y hot reload de config |
 | M5 | pendiente | Panel web completo (login, CRUD, dashboard) |
-| M6 | pendiente | WebSocket `/events` para status en vivo |
+| M6 | hecho | WebSocket /events para status en vivo (reemplaza polling del panel) |
 | M7 | pendiente | Service mode (launchd / systemd / SCM) |
 | M8 | pendiente | Distribución (binarios firmados + instaladores) |
 | M9 | pendiente | Hardening (rate limit, métricas, logs con rotación) |

@@ -64,23 +64,60 @@
     }
   }
 
-  // ---------- refresh ----------
-  let refreshTimer = null;
-  function startRefresh() {
-    if (refreshTimer) clearInterval(refreshTimer);
-    refreshTimer = setInterval(refresh, 10000);
-    refresh();
+  // ---------- refresh / WebSocket ----------
+  let ws = null;
+  let wsRetryTimer = null;
+
+  function connectWS() {
+    if (ws) { try { ws.close(); } catch (_) {} }
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = proto + '//' + location.host + '/events';
+    ws = new WebSocket(url);
+    ws.onopen = function () {
+      // Initial full load via REST, then WS keeps it fresh.
+      loadDashboard();
+      if (currentView === 'printers') loadPrinters();
+      if (currentView === 'jobs') loadJobs();
+    };
+    ws.onmessage = function (e) {
+      try {
+        var evt = JSON.parse(e.data);
+        handleWSEvent(evt);
+      } catch (_) {}
+    };
+    ws.onclose = function () {
+      ws = null;
+      wsRetryTimer = setTimeout(connectWS, 3000);
+    };
+    ws.onerror = function () {};
   }
 
-  async function refresh() {
-    if (!loggedIn) return;
-    try {
-      healthData = await api('GET', '/health');
-      printersData = (await api('GET', '/printers')).printers || [];
-      $('#agent-version').textContent = 'v' + (healthData.version || '?');
-    } catch (e) { /* agent down — keep last state */ }
-    if (currentView === 'dashboard') renderDashboard();
-    if (currentView === 'jobs') renderJobs();
+  function handleWSEvent(evt) {
+    // Keep health / printer data up to date without a full poll.
+    if (evt.type === 'job.printed' || evt.type === 'job.failed' || evt.type === 'job.cancelled') {
+      // A job changed state; refresh the jobs view if visible.
+      if (currentView === 'jobs') renderJobs();
+    }
+    if (evt.type === 'printer.status_changed') {
+      // Update the local printer list so the dashboard stays current.
+      if (healthData && healthData.printers) {
+        var hp = healthData.printers.find(function (p) { return p.id === evt.printer; });
+        if (hp) hp.status = evt.status;
+      }
+      if (currentView === 'dashboard') renderDashboard();
+    }
+    // On any event, refresh the dashboard summary.
+    if (evt.type === 'job.queued' || evt.type === 'job.printing') {
+      if (currentView === 'dashboard') {
+        // Lightweight refresh: re-ask health.
+        fetch('/health').then(function (r) { return r.json(); }).then(function (d) { healthData = d; renderDashboard(); }).catch(function () {});
+      }
+    }
+  }
+
+  function startRefresh() {
+    if (wsRetryTimer) clearTimeout(wsRetryTimer);
+    connectWS();
   }
 
   // ---------- routing ----------

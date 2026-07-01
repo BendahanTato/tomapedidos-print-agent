@@ -6,14 +6,17 @@
 package queue
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tomapedidos/print-agent/internal/eventbus"
 )
 
 // Status is the lifecycle state of a single job.
@@ -56,7 +59,8 @@ type Queue struct {
 	byID     map[string]*Job
 	maxRetry int
 	dedupTTL time.Duration
-	st       *store    // nil when persistence is off
+	st       *store
+	bus      *eventbus.Bus
 	log      *slog.Logger
 
 	notifyCh chan struct{}
@@ -71,12 +75,13 @@ type Queue struct {
 //
 // persistPath is resolved relative to the current working directory
 // unless it starts with / or C:\ .
-func New(maxRetries int, dedupTTL time.Duration, persistPath string, log *slog.Logger) (*Queue, error) {
+func New(maxRetries int, dedupTTL time.Duration, persistPath string, log *slog.Logger, bus *eventbus.Bus) (*Queue, error) {
 	q := &Queue{
 		queues:   make(map[string][]*Job),
 		byID:     make(map[string]*Job),
 		maxRetry: maxRetries,
 		dedupTTL: dedupTTL,
+		bus:      bus,
 		log:      log,
 		notifyCh: make(chan struct{}, 1),
 	}
@@ -219,6 +224,7 @@ func (q *Queue) Submit(printerID string, jobID string, payload []byte) (*Job, er
 	case q.notifyCh <- struct{}{}:
 	default:
 	}
+	q.emit("job.queued", j, "")
 	return j, nil
 }
 
@@ -236,6 +242,7 @@ func (q *Queue) Pop(printerID string) *Job {
 			j.Attempts++
 			j.StartedAt = time.Now()
 			q.persistUpdateLocked(j)
+			q.emit("job.printing", j, "")
 			return j
 		}
 	}
@@ -250,6 +257,7 @@ func (q *Queue) MarkPrinted(j *Job) {
 	j.Status = StatusPrinted
 	j.FinishedAt = time.Now()
 	delete(q.byID, j.ID)
+	q.emit("job.printed", j, "")
 	if q.st != nil {
 		if err := q.st.deleteJob(j.ID); err != nil && q.log != nil {
 			q.log.Warn("persist delete failed", "job_id", j.ID, "error", err)
@@ -268,11 +276,13 @@ func (q *Queue) MarkFailed(j *Job, errMsg string) {
 	if j.Attempts >= j.MaxAttempts {
 		j.Status = StatusFailed
 		q.persistUpdateLocked(j)
+		q.emit("job.failed", j, errMsg)
 		return
 	}
 	j.Status = StatusQueued
 	q.queues[j.PrinterID] = append(q.queues[j.PrinterID], j)
 	q.persistUpdateLocked(j)
+	q.emit("job.queued", j, "")
 }
 
 // Cancel marks a queued or printing job as cancelled.
@@ -289,6 +299,7 @@ func (q *Queue) Cancel(jobID string) (*Job, bool) {
 	j.Status = StatusCancelled
 	j.FinishedAt = time.Now()
 	q.persistUpdateLocked(j)
+	q.emit("job.cancelled", j, "")
 	return j, true
 }
 
@@ -350,10 +361,10 @@ func (q *Queue) List(n int, statusFilter Status) []*Job {
 		}
 	}
 
-	// Newest first.
-	for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
-		all[i], all[j] = all[j], all[i]
-	}
+	// Newest first: sort by CreatedAt descending.
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].CreatedAt.After(all[j].CreatedAt)
+	})
 	if n > 0 && len(all) > n {
 		all = all[:n]
 	}
@@ -380,6 +391,21 @@ func (q *Queue) persistUpdateLocked(j *Job) {
 	if err := q.st.updateJob(j); err != nil && q.log != nil {
 		q.log.Warn("persist update failed", "job_id", j.ID, "error", err)
 	}
+}
+
+func (q *Queue) emit(typ string, j *Job, errMsg string) {
+	if q.bus == nil {
+		return
+	}
+	payload, _ := json.Marshal(j)
+	q.bus.Publish(eventbus.Event{
+		Type:    typ,
+		JobID:   j.ID,
+		Printer: j.PrinterID,
+		Status:  string(j.Status),
+		Error:   errMsg,
+		Payload: payload,
+	})
 }
 
 // StoredJob is a thin projection returned by store queries when the

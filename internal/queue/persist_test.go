@@ -15,7 +15,7 @@ func TestPersistSurvivesRestart(t *testing.T) {
 	dbPath := filepath.Join(dir, "jobs.db")
 
 	// First "process life": submit a job.
-	q1, err := New(2, time.Minute, dbPath, nil)
+	q1, err := New(2, time.Minute, dbPath, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestPersistSurvivesRestart(t *testing.T) {
 	_ = q1.Close()
 
 	// Second "process life": open the same database.
-	q2, err := New(2, time.Minute, dbPath, nil)
+	q2, err := New(2, time.Minute, dbPath, nil, nil)
 	if err != nil {
 		t.Fatalf("New #2: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestPersistSurvivesRestart(t *testing.T) {
 	_ = q2.Close()
 
 	// Third life: the failed job should be there (requeued).
-	q3, err := New(2, time.Minute, dbPath, nil)
+	q3, err := New(2, time.Minute, dbPath, nil, nil)
 	if err != nil {
 		t.Fatalf("New #3: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestPersistSurvivesRestart(t *testing.T) {
 // TestPersistInMemoryFallback ensures that passing "" for persistPath
 // results in the old pure-in-memory behaviour.
 func TestPersistInMemoryFallback(t *testing.T) {
-	q, err := New(0, 0, "", nil)
+	q, err := New(0, 0, "", nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -99,14 +99,14 @@ func TestPersistDedupAcrossRestarts(t *testing.T) {
 	dbPath := filepath.Join(dir, "dedup.db")
 
 	// First life: submit and finish a job.
-	q1, _ := New(1, time.Hour, dbPath, nil)
+	q1, _ := New(1, time.Hour, dbPath, nil, nil)
 	q1.Submit("p1", "dedup-99", []byte("a"))
 	popped := q1.Pop("p1")
 	q1.MarkPrinted(popped)
 	_ = q1.Close()
 
 	// Second life: same job_id should still be dedup'd.
-	q2, _ := New(1, time.Hour, dbPath, nil)
+	q2, _ := New(1, time.Hour, dbPath, nil, nil)
 	_, err := q2.Submit("p1", "dedup-99", []byte("b"))
 	if !os.IsTimeout(nil) && err != ErrDuplicate {
 		// Actually check properly.

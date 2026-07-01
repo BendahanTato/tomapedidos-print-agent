@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/tomapedidos/print-agent/internal/config"
+	"github.com/tomapedidos/print-agent/internal/eventbus"
 	"github.com/tomapedidos/print-agent/internal/printer"
 	"github.com/tomapedidos/print-agent/internal/queue"
 )
@@ -26,12 +27,12 @@ import (
 //go:embed web
 var webFS embed.FS
 
-// Deps is the bundle of objects the HTTP handlers need. It is created
-// once at startup and passed to New().
+// Deps is the bundle of objects the HTTP handlers need.
 type Deps struct {
 	Config    *config.Store
 	Registry  *printer.Registry
 	Queue     *queue.Queue
+	EventBus  *eventbus.Bus // nil = events disabled
 	Log       *slog.Logger
 	StartedAt time.Time
 }
@@ -67,6 +68,7 @@ func New(d Deps) http.Handler {
 	r.Get("/health", healthHandler(d))
 	r.Get("/printers", listPrintersHandler(d))
 	r.Get("/printers/{id}", getPrinterHandler(d))
+	r.Get("/events", eventsHandler(d))
 
 	r.Post("/print", printHandler(d))
 	r.Post("/print/batch", printBatchHandler(d))
