@@ -63,6 +63,7 @@ func NewFromConfig(ctx context.Context, p config.Printer) (Printer, Info, error)
 				printerType = "usb-office" // safe default
 			}
 		}
+		up.SetType(printerType)
 		if mam != "" {
 			info.MakeAndModel = mam
 		}

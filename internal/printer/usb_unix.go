@@ -100,6 +100,9 @@ func (p *USBPrinter) waitForDrain(ctx context.Context) error {
 // Close is a no-op for USBPrinter. The spooler session is per-Write.
 func (p *USBPrinter) Close() error { return nil }
 
+// SetType is a no-op on Unix — both thermal and office use `lp -o raw`.
+func (p *USBPrinter) SetType(string) {}
+
 // Ping checks whether the print queue is reachable by asking CUPS.
 // It does not query the hardware status of the printer itself.
 func (p *USBPrinter) Ping(ctx context.Context) error {
