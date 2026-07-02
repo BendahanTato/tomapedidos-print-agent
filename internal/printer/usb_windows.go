@@ -12,11 +12,18 @@ import (
 )
 
 var (
-	winspool         = windows.NewLazySystemDLL("winspool.drv")
-	procOpenPrinter  = winspool.NewProc("OpenPrinterW")
+	winspool        = windows.NewLazySystemDLL("winspool.drv")
+	procOpenPrinter = winspool.NewProc("OpenPrinterW")
 	procClosePrinter = winspool.NewProc("ClosePrinter")
 	procWritePrinter = winspool.NewProc("WritePrinter")
+	procGetPrinterW = winspool.NewProc("GetPrinterW")
 )
+
+// USBPrinter for Windows uses the native winspool.drv API to write
+// raw bytes directly to the printer spooler. This works for both
+// thermal/ESC/POS and office/plain-text printers — the rendering
+// layer (RenderKitchen vs RenderKitchenPlainText) already produces
+// the correct format.
 
 // USBPrinter for Windows uses the native winspool.drv API to write
 // raw bytes directly to the printer spooler. This works for both
@@ -95,8 +102,68 @@ func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 // Close is a no-op — handle is closed per-Write.
 func (p *USBPrinter) Close() error { return nil }
 
-// MakeAndModel returns empty on Windows.
-func (p *USBPrinter) MakeAndModel(ctx context.Context) string { return "" }
+// MakeAndModel queries the Windows spooler for the printer's driver name
+// using GetPrinterW (PRINTER_INFO_2). The driver name contains the make
+// and model (e.g., "EPSON L3250 Series", "Brother HL-L2360D series").
+func (p *USBPrinter) MakeAndModel(ctx context.Context) string {
+	name, err := windows.UTF16PtrFromString(p.systemName)
+	if err != nil {
+		return ""
+	}
+
+	var handle windows.Handle
+	ret, _, _ := procOpenPrinter.Call(
+		uintptr(unsafe.Pointer(name)),
+		uintptr(unsafe.Pointer(&handle)),
+		0,
+	)
+	if ret == 0 {
+		return ""
+	}
+	defer procClosePrinter.Call(uintptr(handle))
+
+	// First call: get required buffer size.
+	var needed uint32
+	procGetPrinterW.Call(
+		uintptr(handle),
+		2, // PRINTER_INFO_2 level
+		0,
+		0,
+		uintptr(unsafe.Pointer(&needed)),
+	)
+
+	if needed == 0 {
+		return ""
+	}
+
+	// Second call: get the actual data.
+	buf := make([]byte, needed)
+	ret, _, _ = procGetPrinterW.Call(
+		uintptr(handle),
+		2, // PRINTER_INFO_2 level
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(needed),
+		uintptr(unsafe.Pointer(&needed)),
+	)
+	if ret == 0 {
+		return ""
+	}
+
+	// PRINTER_INFO_2 layout (64-bit Windows):
+	//   offset  0: pServerName  (LPWSTR)
+	//   offset  8: pPrinterName (LPWSTR)
+	//   offset 16: pShareName   (LPWSTR)
+	//   offset 24: pPortName    (LPWSTR)
+	//   offset 32: pDriverName  (LPWSTR) ← this is what we want
+	if len(buf) < 40 {
+		return ""
+	}
+	driverPtr := *(*uintptr)(unsafe.Pointer(&buf[32]))
+	if driverPtr == 0 {
+		return ""
+	}
+	return windows.UTF16PtrToString((*uint16)(unsafe.Pointer(driverPtr)))
+}
 
 // Ping checks whether the printer is registered in the Windows spooler.
 func (p *USBPrinter) Ping(ctx context.Context) error {
