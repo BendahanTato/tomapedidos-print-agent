@@ -126,7 +126,7 @@ func Heartbeat(ctx context.Context, reg *Registry, log *slog.Logger, every time.
 // New printers are opened and registered; printers removed from the
 // config are closed and removed from the registry. Used by PUT /config
 // so the operator can add/remove printers without restarting the agent.
-func SyncFromConfig(ctx context.Context, reg *Registry, cfg config.Config, log *slog.Logger) {
+func SyncFromConfig(ctx context.Context, reg *Registry, cfg config.Config, log *slog.Logger) []string {
 	// Collect desired IDs from the config.
 	want := make(map[string]config.Printer, len(cfg.Printers))
 	for _, p := range cfg.Printers {
@@ -145,6 +145,7 @@ func SyncFromConfig(ctx context.Context, reg *Registry, cfg config.Config, log *
 		}
 	}
 	// Add printers that are new in the config.
+	var added []string
 	for id, p := range want {
 		if _, ok := reg.Get(id); ok {
 			continue // already registered
@@ -158,9 +159,11 @@ func SyncFromConfig(ctx context.Context, reg *Registry, cfg config.Config, log *
 		}
 		if pr != nil {
 			reg.Add(pr, info)
+			added = append(added, id)
 			if log != nil {
 				log.Info("printer added by config reload", "printer", id)
 			}
 		}
 	}
+	return added
 }

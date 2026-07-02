@@ -12,6 +12,8 @@
   let printersData = [];
   let configData = null;
 
+  const API_BASE = window.location.port === '4510' ? '' : 'http://127.0.0.1:4510';
+
   // ---------- helpers ----------
   const $ = (sel, ctx) => (ctx || document).querySelector(sel);
   const $$ = (sel, ctx) => [...(ctx || document).querySelectorAll(sel)];
@@ -20,7 +22,7 @@
   async function api(method, path, body) {
     const opts = { method, headers: {} };
     if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-    const res = await fetch(path, opts);
+    const res = await fetch(API_BASE + path, opts);
     if (res.status === 401) { logout(); throw new Error('unauthorized'); }
     if (!res.ok) {
       let msg = res.statusText;
@@ -52,7 +54,7 @@
     const pin = $('#pin-input').value;
     try {
       const body = { pin: pin };
-      await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      await fetch(API_BASE + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       loggedIn = true;
       $('#login-screen').classList.add('hidden');
       $('#main-screen').classList.remove('hidden');
@@ -71,12 +73,13 @@
   function connectWS() {
     if (ws) { try { ws.close(); } catch (_) {} }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = proto + '//' + location.host + '/events';
+    const host = window.location.port === '4510' ? window.location.host : '127.0.0.1:4510';
+    const url = proto + '//' + host + '/events';
     ws = new WebSocket(url);
     ws.onopen = function () {
       // Initial full load via REST, then WS keeps it fresh.
-      fetch('/health').then(function (r) { return r.json(); }).then(function (d) { healthData = d; }).catch(function () {});
-      fetch('/printers').then(function (r) { return r.json(); }).then(function (d) { printersData = (d.printers || []); }).catch(function () {});
+      fetch(API_BASE + '/health').then(function (r) { return r.json(); }).then(function (d) { healthData = d; }).catch(function () {});
+      fetch(API_BASE + '/printers').then(function (r) { return r.json(); }).then(function (d) { printersData = (d.printers || []); }).catch(function () {});
     };
     ws.onmessage = function (e) {
       try {
@@ -109,7 +112,7 @@
     if (evt.type === 'job.queued' || evt.type === 'job.printing') {
       if (currentView === 'dashboard') {
         // Lightweight refresh: re-ask health.
-        fetch('/health').then(function (r) { return r.json(); }).then(function (d) { healthData = d; renderDashboard(); }).catch(function () {});
+        fetch(API_BASE + '/health').then(function (r) { return r.json(); }).then(function (d) { healthData = d; renderDashboard(); }).catch(function () {});
       }
     }
   }
@@ -354,10 +357,41 @@
 
   async function testPrint(id) {
     try {
-      var batchBody = { jobs: [{ printer_id: id, header: { order_number: 0, customer_name: 'TEST PRINT', delivery_type: 'take_away' }, items: [{ qty: 1, name: 'TEST PRINT — OK' }], options: { cut: 'partial' } }] };
-      var resp = await api('POST', '/print/batch', batchBody);
-      var jobIds = (resp.jobs || []).map(function (j) { return j.job_id; }).join(', ');
-      toast('Test print enviado. ' + (jobIds ? 'Job(s): ' + jobIds : ''), 'success');
+      var p = printersData.find(function (x) { return x.id === id; }) || {};
+      var actionDesc = '';
+      if (p.type === 'network') {
+        actionDesc = 'Enviando bytes ESC/POS vía TCP/IP a <strong>' + esc(p.host || '') + ':' + esc(p.port || 9100) + '</strong>';
+      } else if (p.type === 'usb-office') {
+        actionDesc = 'Ejecutando comando PowerShell:<br><pre style="background:#f4f4f5;padding:10px;border-radius:6px;font-family:monospace;font-size:12px;overflow-x:auto;margin-top:10px;color:#27272a;border:1px solid #e4e4e7;white-space:pre-wrap">[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;\n@\'\n&lt;ticket&gt;\n\'@ | Out-Printer -Name "' + esc(p.system_name || p.name || '') + '"</pre>';
+      } else if (p.type === 'usb') {
+        actionDesc = 'Ejecutando comando de Windows Spooler:<br><pre style="background:#f4f4f5;padding:10px;border-radius:6px;font-family:monospace;font-size:12px;overflow-x:auto;margin-top:10px;color:#27272a;border:1px solid #e4e4e7">print /d:"' + esc(p.system_name || p.name || '') + '" &lt;archivo_temporal&gt;</pre>';
+      } else if (p.type === 'file') {
+        actionDesc = 'Escribiendo bytes ESC/POS en el archivo:<br><strong>' + esc(p.file_path || '') + '</strong>';
+      } else {
+        actionDesc = 'Enviando trabajo al agente...';
+      }
+
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.id = 'test-print-modal';
+      overlay.innerHTML = '<div class="modal" style="max-width:520px"><div class="modal-header"><span class="modal-title">Ejecutando Test Print</span><button class="modal-close">&times;</button></div>' +
+        '<div style="font-size:14px;color:#4b5563;line-height:1.5;margin-bottom:1rem">' + actionDesc + '</div>' +
+        '<div class="modal-footer"><button class="btn btn-primary" id="tp-continue">Continuar e Imprimir</button><button class="btn" id="tp-cancel" style="margin-left:0.5rem">Cancelar</button></div></div>';
+      document.body.appendChild(overlay);
+
+      overlay.querySelector('.modal-close').onclick = function () { overlay.remove(); };
+      overlay.querySelector('#tp-cancel').onclick = function () { overlay.remove(); };
+      overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
+
+      overlay.querySelector('#tp-continue').onclick = async function () {
+        overlay.remove();
+        try {
+          var batchBody = { jobs: [{ printer_id: id, header: { order_number: 0, customer_name: 'TEST PRINT', delivery_type: 'take_away' }, items: [{ qty: 1, name: 'TEST PRINT — OK' }], options: { cut: 'partial' } }] };
+          var resp = await api('POST', '/print/batch', batchBody);
+          var jobIds = (resp.jobs || []).map(function (j) { return j.job_id; }).join(', ');
+          toast('Test print enviado. ' + (jobIds ? 'Job(s): ' + jobIds : ''), 'success');
+        } catch (e) { toast('Error: ' + e.message, 'error'); }
+      };
     } catch (e) { toast('Error: ' + e.message, 'error'); }
   }
 
@@ -442,7 +476,7 @@
     try {
       var allJobs = (JSON.parse(document.querySelector('#view-jobs .data-table') ? '[]' : '[]'));
     } catch (_) {}
-    fetch('/jobs/' + id).then(function (r) { return r.json(); }).then(function (j) {
+    fetch(API_BASE + '/jobs/' + id).then(function (r) { return r.json(); }).then(function (j) {
       if (!j.preview) { toast('Sin preview disponible', 'warn'); return; }
       var overlay = document.createElement('div');
       overlay.className = 'modal-overlay';

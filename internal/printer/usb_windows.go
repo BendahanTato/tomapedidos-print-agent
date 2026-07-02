@@ -54,15 +54,16 @@ func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
+	if p.printerType == "usb-office" {
+		return p.writeOffice(ctx, payload)
+	}
+
 	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("tpd-agent-%s-%d.bin", p.systemName, time.Now().UnixNano()))
 	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	defer os.Remove(tmp)
 
-	if p.printerType == "usb-office" {
-		return p.writeOffice(ctx, tmp)
-	}
 	return p.writeRaw(ctx, tmp)
 }
 
@@ -77,12 +78,12 @@ func (p *USBPrinter) writeRaw(ctx context.Context, filePath string) error {
 	return nil
 }
 
-// writeOffice sends the file via PowerShell Out-Printer.
+// writeOffice sends the payload directly via PowerShell here-string to Out-Printer.
 // Best for office/laser printers that expect plain text from the driver.
-func (p *USBPrinter) writeOffice(ctx context.Context, filePath string) error {
+func (p *USBPrinter) writeOffice(ctx context.Context, payload []byte) error {
 	ps := fmt.Sprintf(
-		"$content = [System.IO.File]::ReadAllText('%s', [System.Text.Encoding]::UTF8); $content | Out-Printer -Name '%s'",
-		filePath, p.systemName,
+		"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; @'\n%s\n'@ | Out-Printer -Name '%s'",
+		string(payload), p.systemName,
 	)
 	cmd := exec.CommandContext(ctx, "powershell", "-Command", ps)
 	out, err := cmd.CombinedOutput()

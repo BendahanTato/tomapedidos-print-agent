@@ -32,6 +32,7 @@ type Deps struct {
 	Config    *config.Store
 	Registry  *printer.Registry
 	Queue     *queue.Queue
+	Pool      *queue.Pool
 	EventBus  *eventbus.Bus // nil = events disabled
 	Log       *slog.Logger
 	StartedAt time.Time
@@ -217,7 +218,12 @@ func configPutHandler(d Deps) http.HandlerFunc {
 		}
 		// Reconcile the registry with the new config so newly added
 		// printers are available immediately without a restart.
-		printer.SyncFromConfig(r.Context(), d.Registry, d.Config.Get(), d.Log)
+		added := printer.SyncFromConfig(r.Context(), d.Registry, d.Config.Get(), d.Log)
+		if d.Pool != nil {
+			for _, id := range added {
+				d.Pool.Add(r.Context(), id)
+			}
+		}
 		d.Log.Info("config replaced via panel")
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
