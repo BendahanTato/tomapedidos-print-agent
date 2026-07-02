@@ -200,8 +200,14 @@
   async function detectPrinters() {
     try {
       var data = await api('GET', '/printers/detect');
-      var detected = data.printers || [];
-      if (detected.length === 0) { toast('No se encontraron impresoras en el OS', 'warn'); return; }
+      var raw = data.printers || [];
+      if (raw.length === 0) { toast('No se encontraron impresoras en el OS', 'warn'); return; }
+
+      // Normalize: API may return strings (legacy) or objects {name, make_and_model, suggested_type}
+      var detected = raw.map(function (p) {
+        if (typeof p === 'string') return { name: p, make_and_model: '', suggested_type: 'usb-office' };
+        return p;
+      });
 
       var existingNames = {};
       try {

@@ -43,7 +43,9 @@ func (p *USBPrinter) Open(ctx context.Context) error {
 	return p.checkExists(ctx)
 }
 
-// Write sends the payload to the printer via a temp file + `print /d:…`.
+// Write sends the payload to the printer. On Windows the most reliable
+// way to raw-print is the legacy `print /d:` command which hands the
+// file directly to the spooler without interpretation.
 func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
