@@ -1,5 +1,10 @@
 package escpos
 
+import (
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/charmap"
+)
+
 // codePageNumbers maps the friendly names used in the JSON config to the
 // numeric arguments expected by ESC t n. The list is intentionally short;
 // add more as we encounter printers that ship with non-standard defaults.
@@ -25,6 +30,18 @@ var codePageNumbers = map[string]int{
 	"wpc1252":      16,
 }
 
+// CodePageEncoders maps friendly names to their charmap.Charmap implementations.
+var CodePageEncoders = map[string]encoding.Encoding{
+	"cp437":        charmap.CodePage437,
+	"cp850":        charmap.CodePage850,
+	"cp860":        charmap.CodePage860,
+	"cp863":        charmap.CodePage863,
+	"cp865":        charmap.CodePage865,
+	"cp1252":       charmap.Windows1252,
+	"windows-1252": charmap.Windows1252,
+	"wpc1252":      charmap.Windows1252,
+}
+
 // SupportedCodePages returns the list of names the agent understands.
 // Useful for the panel UI to render a dropdown of valid choices.
 func SupportedCodePages() []string {
@@ -34,3 +51,4 @@ func SupportedCodePages() []string {
 	}
 	return out
 }
+

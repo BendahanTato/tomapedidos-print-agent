@@ -108,3 +108,23 @@ func TestKitchenTemplateCopies(t *testing.T) {
 		t.Errorf("copies: got len %d, want %d", len(thrice), 3*len(once))
 	}
 }
+
+func TestBuilderEncoding(t *testing.T) {
+	b := NewBuilder()
+	if err := b.SelectCodePage("cp850"); err != nil {
+		t.Fatalf("cp850: %v", err)
+	}
+	b.Text("Ñoquis y Café")
+	got := b.Bytes()
+	// Las primeras 3 bytes son de SelectCodePage: ESC t 0x02 (1B 74 02)
+	if len(got) < 3 {
+		t.Fatalf("Expected at least 3 bytes, got %d", len(got))
+	}
+	gotText := got[3:]
+	// CP850: Ñ = 0xA5, é = 0x82
+	want := []byte{0xA5, 'o', 'q', 'u', 'i', 's', ' ', 'y', ' ', 'C', 'a', 'f', 0x82}
+	if !bytes.Equal(gotText, want) {
+		t.Errorf("Encoding text failed.\nGot:  %v\nWant: %v", gotText, want)
+	}
+}
+

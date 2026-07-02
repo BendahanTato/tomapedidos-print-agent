@@ -74,8 +74,12 @@ func (w *Worker) processOne(ctx context.Context, job *Job) {
 			slog.String("error", err.Error()),
 		)
 		w.registry.SetStatus(w.printerID, printer.StatusError, err.Error())
+		
+		// Calcular backoff y establecer NextRetryAt para evitar Head-of-Line Blocking
+		backoff := w.getBackoff(job.Attempts)
+		job.NextRetryAt = time.Now().Add(backoff)
+		
 		w.queue.MarkFailed(job, err.Error())
-		w.sleepBackoff(ctx, job.Attempts)
 		// Wake the loop so a later retry can run quickly.
 		w.queue.Wake()
 		return
@@ -89,13 +93,11 @@ func (w *Worker) processOne(ctx context.Context, job *Job) {
 	)
 }
 
-// sleepBackoff blocks for the configured retry delay for attempt n. It
-// returns early if ctx is cancelled. The default schedule is taken from
-// the JSON config (queue.retry_backoff_ms); a missing/short slice falls
-// back to 1s.
-func (w *Worker) sleepBackoff(ctx context.Context, attempt int) {
+// getBackoff returns the configured retry delay for attempt n.
+// A missing/short slice falls back to 1s.
+func (w *Worker) getBackoff(attempt int) time.Duration {
 	if len(w.cfg.RetryBackoffMs) == 0 {
-		return
+		return 1 * time.Second
 	}
 	idx := attempt - 1
 	if idx < 0 {
@@ -106,14 +108,9 @@ func (w *Worker) sleepBackoff(ctx context.Context, attempt int) {
 	}
 	d := time.Duration(w.cfg.RetryBackoffMs[idx]) * time.Millisecond
 	if d <= 0 {
-		return
+		return 1 * time.Second
 	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-	case <-t.C:
-	}
+	return d
 }
 
 // Pool spawns one Worker per registered printer and runs them until ctx

@@ -12,18 +12,22 @@ import (
 )
 
 var (
-	winspool        = windows.NewLazySystemDLL("winspool.drv")
-	procOpenPrinter = winspool.NewProc("OpenPrinterW")
-	procClosePrinter = winspool.NewProc("ClosePrinter")
-	procWritePrinter = winspool.NewProc("WritePrinter")
-	procGetPrinterW = winspool.NewProc("GetPrinterW")
+	winspool             = windows.NewLazySystemDLL("winspool.drv")
+	procOpenPrinter      = winspool.NewProc("OpenPrinterW")
+	procClosePrinter     = winspool.NewProc("ClosePrinter")
+	procWritePrinter     = winspool.NewProc("WritePrinter")
+	procGetPrinterW      = winspool.NewProc("GetPrinterW")
+	procStartDocPrinter  = winspool.NewProc("StartDocPrinterW")
+	procStartPagePrinter = winspool.NewProc("StartPagePrinter")
+	procEndPagePrinter   = winspool.NewProc("EndPagePrinter")
+	procEndDocPrinter     = winspool.NewProc("EndDocPrinter")
 )
 
-// USBPrinter for Windows uses the native winspool.drv API to write
-// raw bytes directly to the printer spooler. This works for both
-// thermal/ESC/POS and office/plain-text printers — the rendering
-// layer (RenderKitchen vs RenderKitchenPlainText) already produces
-// the correct format.
+type docInfo1 struct {
+	docName    *uint16
+	outputFile *uint16
+	dataType   *uint16
+}
 
 // USBPrinter for Windows uses the native winspool.drv API to write
 // raw bytes directly to the printer spooler. This works for both
@@ -63,6 +67,10 @@ func (p *USBPrinter) Open(ctx context.Context) error {
 // Write sends the payload directly to the printer via winspool.drv.
 // The bytes are written as-is — no encoding or transformation.
 func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
@@ -82,6 +90,30 @@ func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 	}
 	defer procClosePrinter.Call(uintptr(handle))
 
+	docNamePtr, _ := windows.UTF16PtrFromString("Print Agent Job")
+	dataTypePtr, _ := windows.UTF16PtrFromString("RAW")
+	di := docInfo1{
+		docName:    docNamePtr,
+		outputFile: nil,
+		dataType:   dataTypePtr,
+	}
+
+	ret, _, callErr = procStartDocPrinter.Call(
+		uintptr(handle),
+		1,
+		uintptr(unsafe.Pointer(&di)),
+	)
+	if ret == 0 {
+		return fmt.Errorf("StartDocPrinter(%s): %w", p.systemName, callErr)
+	}
+	defer procEndDocPrinter.Call(uintptr(handle))
+
+	ret, _, callErr = procStartPagePrinter.Call(uintptr(handle))
+	if ret == 0 {
+		return fmt.Errorf("StartPagePrinter(%s): %w", p.systemName, callErr)
+	}
+	defer procEndPagePrinter.Call(uintptr(handle))
+
 	var written uint32
 	ret, _, callErr = procWritePrinter.Call(
 		uintptr(handle),
@@ -92,9 +124,6 @@ func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 	if ret == 0 {
 		return fmt.Errorf("WritePrinter(%s): %w", p.systemName, callErr)
 	}
-
-	// Wait for spooler to finish processing
-	windows.FlushFileBuffers(handle)
 
 	return nil
 }

@@ -12,6 +12,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+
+	"golang.org/x/text/encoding"
 )
 
 // Standard ESC/POS command constants.
@@ -28,7 +30,8 @@ const (
 // Builder accumulates ESC/POS commands into a buffer. It is not goroutine
 // safe; create one per render call.
 type Builder struct {
-	buf bytes.Buffer
+	buf     bytes.Buffer
+	encoder *encoding.Encoder
 }
 
 // NewBuilder returns a fresh Builder.
@@ -51,6 +54,7 @@ func (b *Builder) Len() int {
 // Reset clears the buffer. Useful for re-using a Builder across renders.
 func (b *Builder) Reset() {
 	b.buf.Reset()
+	b.encoder = nil
 }
 
 // Initialize sends ESC @ which resets the printer to its default state.
@@ -74,16 +78,22 @@ func (b *Builder) FormFeed() *Builder {
 	return b
 }
 
-// Text appends raw bytes to the buffer without any encoding conversion.
-// Callers are expected to feed bytes already in the target code page.
+// Text appends raw bytes to the buffer after translating the UTF-8 string to the selected Code Page.
 func (b *Builder) Text(s string) *Builder {
+	if b.encoder != nil {
+		encoded, err := b.encoder.Bytes([]byte(s))
+		if err == nil {
+			b.buf.Write(encoded)
+			return b
+		}
+	}
 	b.buf.WriteString(s)
 	return b
 }
 
 // TextLine appends s followed by a LF.
 func (b *Builder) TextLine(s string) *Builder {
-	b.buf.WriteString(s)
+	b.Text(s)
 	b.buf.WriteByte(lf)
 	return b
 }
@@ -150,6 +160,12 @@ func (b *Builder) SelectCodePage(name string) error {
 	b.buf.WriteByte(esc)
 	b.buf.WriteByte('t')
 	b.buf.WriteByte(byte(n))
+
+	if enc, ok := CodePageEncoders[name]; ok {
+		b.encoder = enc.NewEncoder()
+	} else {
+		b.encoder = nil
+	}
 	return nil
 }
 
