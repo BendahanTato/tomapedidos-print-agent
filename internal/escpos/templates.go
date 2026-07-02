@@ -10,12 +10,12 @@ import (
 // Item is one line in a print job, with optional modifiers and a free-form
 // note. UnitPrice and Subtotal are only honored by the "cash" template.
 type Item struct {
-	Qty        int
-	Name       string
-	Modifiers  []string
-	Notes      string
-	UnitPrice  float64
-	Subtotal   float64
+	Qty       int
+	Name      string
+	Modifiers []string
+	Notes     string
+	UnitPrice float64
+	Subtotal  float64
 }
 
 // Header carries the order-level metadata rendered at the top of the ticket.

@@ -20,13 +20,37 @@ var (
 	procStartDocPrinter  = winspool.NewProc("StartDocPrinterW")
 	procStartPagePrinter = winspool.NewProc("StartPagePrinter")
 	procEndPagePrinter   = winspool.NewProc("EndPagePrinter")
-	procEndDocPrinter     = winspool.NewProc("EndDocPrinter")
+	procEndDocPrinter    = winspool.NewProc("EndDocPrinter")
 )
 
 type docInfo1 struct {
 	docName    *uint16
 	outputFile *uint16
 	dataType   *uint16
+}
+
+type printerInfo2 struct {
+	pServerName         *uint16
+	pPrinterName        *uint16
+	pShareName          *uint16
+	pPortName           *uint16
+	pDriverName         *uint16
+	pComment            *uint16
+	pLocation           *uint16
+	pDevMode            uintptr
+	pSepFile            *uint16
+	pPrintProcessor     *uint16
+	pDatatype           *uint16
+	pParameters         *uint16
+	pSecurityDescriptor uintptr
+	Attributes          uint32
+	Priority            uint32
+	DefaultPriority     uint32
+	StartTime           uint32
+	UntilTime           uint32
+	Status              uint32
+	cJobs               uint32
+	AveragePPM          uint32
 }
 
 // USBPrinter for Windows uses the native winspool.drv API to write
@@ -74,6 +98,20 @@ func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
+	errc := make(chan error, 1)
+	go func() {
+		errc <- p.doWrite(payload)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("printer %q write timeout: %w", p.systemName, ctx.Err())
+	case err := <-errc:
+		return err
+	}
+}
+
+func (p *USBPrinter) doWrite(payload []byte) error {
 	name, err := windows.UTF16PtrFromString(p.systemName)
 	if err != nil {
 		return fmt.Errorf("invalid printer name %q: %w", p.systemName, err)
@@ -178,20 +216,14 @@ func (p *USBPrinter) MakeAndModel(ctx context.Context) string {
 		return ""
 	}
 
-	// PRINTER_INFO_2 layout (64-bit Windows):
-	//   offset  0: pServerName  (LPWSTR)
-	//   offset  8: pPrinterName (LPWSTR)
-	//   offset 16: pShareName   (LPWSTR)
-	//   offset 24: pPortName    (LPWSTR)
-	//   offset 32: pDriverName  (LPWSTR) ← this is what we want
-	if len(buf) < 40 {
+	if len(buf) < int(unsafe.Sizeof(printerInfo2{})) {
 		return ""
 	}
-	driverPtr := *(*uintptr)(unsafe.Pointer(&buf[32]))
-	if driverPtr == 0 {
+	pi2 := (*printerInfo2)(unsafe.Pointer(&buf[0]))
+	if pi2.pDriverName == nil {
 		return ""
 	}
-	return windows.UTF16PtrToString((*uint16)(unsafe.Pointer(driverPtr)))
+	return windows.UTF16PtrToString(pi2.pDriverName)
 }
 
 // Ping checks whether the printer is registered in the Windows spooler.
@@ -203,6 +235,20 @@ func (p *USBPrinter) checkExists(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
+	errc := make(chan error, 1)
+	go func() {
+		errc <- p.doCheckExists()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("printer %q ping timeout: %w", p.systemName, ctx.Err())
+	case err := <-errc:
+		return err
+	}
+}
+
+func (p *USBPrinter) doCheckExists() error {
 	name, err := windows.UTF16PtrFromString(p.systemName)
 	if err != nil {
 		return fmt.Errorf("invalid printer name: %w", err)

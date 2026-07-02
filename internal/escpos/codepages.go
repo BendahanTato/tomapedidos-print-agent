@@ -51,4 +51,3 @@ func SupportedCodePages() []string {
 	}
 	return out
 }
-

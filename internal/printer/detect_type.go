@@ -9,10 +9,10 @@ func DetectType(makeAndModel string) string {
 
 	// Strong thermal indicators — model prefixes that are unambiguously thermal
 	strongThermal := []string{
-		"tm-t", "tm-u", "tm-p", "tm-c",  // Epson TM-series (T=thermal, U=impact)
-		"tsp", "tp-",                       // Star Micronics
-		"pos-", "rp-",                      // Bixolon, Citizen
-		"80mm", "58mm", "76mm",             // Paper width indicates receipt printer
+		"tm-t", "tm-u", "tm-p", "tm-c", // Epson TM-series (T=thermal, U=impact)
+		"tsp", "tp-", // Star Micronics
+		"pos-", "rp-", // Bixolon, Citizen
+		"80mm", "58mm", "76mm", // Paper width indicates receipt printer
 	}
 	for _, kw := range strongThermal {
 		if strings.Contains(m, kw) {

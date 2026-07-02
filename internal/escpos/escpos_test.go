@@ -23,7 +23,7 @@ func TestBuilderCutModes(t *testing.T) {
 		{"full", []byte{0x1D, 'V', 0x00}},
 		{"partial", []byte{0x1D, 'V', 0x01}},
 		{"", []byte{0x1D, 'V', 0x01}}, // default = partial
-		{"none", nil},                  // no bytes emitted
+		{"none", nil},                 // no bytes emitted
 	}
 	for _, c := range cases {
 		b := NewBuilder()
@@ -64,9 +64,9 @@ func TestKickDrawerBounds(t *testing.T) {
 
 func TestKitchenTemplateContainsOrder(t *testing.T) {
 	got, err := RenderKitchen("cp850", 32, Header{
-		OrderNumber:   123,
-		CustomerName:  "Juan",
-		DeliveryType:  "take_away",
+		OrderNumber:  123,
+		CustomerName: "Juan",
+		DeliveryType: "take_away",
 	}, []Item{
 		{Qty: 2, Name: "Pizza Muzza", Modifiers: []string{"Extra queso"}},
 	}, Options{Cut: "partial"})
@@ -127,4 +127,3 @@ func TestBuilderEncoding(t *testing.T) {
 		t.Errorf("Encoding text failed.\nGot:  %v\nWant: %v", gotText, want)
 	}
 }
-

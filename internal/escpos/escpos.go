@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	"golang.org/x/text/encoding"
+	"golang.org/x/text/transform"
 )
 
 // Standard ESC/POS command constants.
@@ -31,7 +32,7 @@ const (
 // safe; create one per render call.
 type Builder struct {
 	buf     bytes.Buffer
-	encoder *encoding.Encoder
+	encoder transform.Transformer
 }
 
 // NewBuilder returns a fresh Builder.
@@ -81,11 +82,15 @@ func (b *Builder) FormFeed() *Builder {
 // Text appends raw bytes to the buffer after translating the UTF-8 string to the selected Code Page.
 func (b *Builder) Text(s string) *Builder {
 	if b.encoder != nil {
-		encoded, err := b.encoder.Bytes([]byte(s))
+		encoded, _, err := transform.Bytes(b.encoder, []byte(s))
 		if err == nil {
 			b.buf.Write(encoded)
 			return b
 		}
+		// If transform fails, write whatever it managed to encode (with replacements).
+		// Never fallback to raw UTF-8 as it will corrupt ESC/POS output.
+		b.buf.Write(encoded)
+		return b
 	}
 	b.buf.WriteString(s)
 	return b
@@ -162,7 +167,7 @@ func (b *Builder) SelectCodePage(name string) error {
 	b.buf.WriteByte(byte(n))
 
 	if enc, ok := CodePageEncoders[name]; ok {
-		b.encoder = enc.NewEncoder()
+		b.encoder = encoding.ReplaceUnsupported(enc.NewEncoder())
 	} else {
 		b.encoder = nil
 	}
