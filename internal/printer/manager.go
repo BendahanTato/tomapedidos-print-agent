@@ -49,13 +49,30 @@ func NewFromConfig(ctx context.Context, p config.Printer) (Printer, Info, error)
 		}
 		info.Status = StatusOnline
 		return fp, info, nil
-	case "usb", "usb-office":
+	case "usb", "usb-office", "":
 		up := NewUSB(p.ID, p.SystemName)
+		// Auto-detect: query CUPS for make-and-model and determine
+		// the rendering type if not explicitly set.
+		mam := up.MakeAndModel(ctx)
+		printerType := p.Type
+		if printerType == "" {
+			// No type configured — classify from hardware info.
+			if mam != "" {
+				printerType = DetectType(mam)
+			} else {
+				printerType = "usb-office" // safe default
+			}
+		}
+		if mam != "" {
+			info.MakeAndModel = mam
+		}
 		if err := up.Open(ctx); err != nil {
+			info.Type = printerType
 			info.Status = StatusOffline
 			info.LastError = err.Error()
 			return up, info, nil
 		}
+		info.Type = printerType
 		info.Status = StatusOnline
 		return up, info, nil
 	default:

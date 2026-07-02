@@ -224,15 +224,15 @@ func configPutHandler(d Deps) http.HandlerFunc {
 }
 
 // detectPrintersHandler scans the OS for installed printers and
-// returns the raw list for the panel to display in a dropdown.
+// returns info including suggested type based on hardware detection.
 func detectPrintersHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		names, err := detectSystemPrinters(r.Context())
+		detected, err := detectSystemPrinters(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "detect_failed", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"printers": names})
+		writeJSON(w, http.StatusOK, map[string]any{"printers": detected})
 	}
 }
 

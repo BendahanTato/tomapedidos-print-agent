@@ -236,8 +236,14 @@ func (c Config) Validate() error {
 			if p.FilePath == "" {
 				return fmt.Errorf("printers[%d] (%s): file requires file_path", i, p.ID)
 			}
+		case "":
+			// Empty type: auto-detect from system_name (usb) or require explicit type.
+			if p.SystemName == "" {
+				return fmt.Errorf("printers[%d] (%s): type is required (or set system_name for auto-detect)", i, p.ID)
+			}
+			// system_name set without type — will be auto-detected as usb/usb-office.
 		default:
-			return fmt.Errorf("printers[%d] (%s): unknown type %q", i, p.ID, p.Type)
+			return fmt.Errorf("printers[%d] (%s): unknown type %q (valid: network, usb, usb-office, file)", i, p.ID, p.Type)
 		}
 		if p.Cut != "" && p.Cut != "partial" && p.Cut != "full" && p.Cut != "none" {
 			return fmt.Errorf("printers[%d] (%s): cut must be partial, full or none", i, p.ID)

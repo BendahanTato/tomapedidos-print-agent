@@ -200,8 +200,8 @@
   async function detectPrinters() {
     try {
       var data = await api('GET', '/printers/detect');
-      var names = data.printers || [];
-      if (names.length === 0) { toast('No se encontraron impresoras en el OS', 'warn'); return; }
+      var detected = data.printers || [];
+      if (detected.length === 0) { toast('No se encontraron impresoras en el OS', 'warn'); return; }
 
       var existingNames = {};
       try {
@@ -211,14 +211,14 @@
         });
       } catch (_) {}
 
-      var detected = names.filter(function (n) { return !existingNames[n]; });
-      if (detected.length === 0) {
+      var newPrinters = detected.filter(function (d) { return !existingNames[d.name]; });
+      if (newPrinters.length === 0) {
         toast('Todas las impresoras detectadas ya están configuradas', 'warn');
         return;
       }
 
-      toast('Encontradas: ' + detected.length + ' impresora(s) nueva(s)', 'success');
-      showPrinterModal(null, detected);
+      toast('Encontradas: ' + newPrinters.length + ' impresora(s) nueva(s)', 'success');
+      showPrinterModal(null, newPrinters);
     } catch (e) { toast('Error: ' + e.message, 'error'); }
   }
 
@@ -234,10 +234,13 @@
         '<div class="detected-section mb-2">' +
           '<p class="text-muted mb-2">Impresoras detectadas en el OS:</p>' +
           '<div class="detected-list">' +
-            detectedNames.map(function (n) {
+            detectedNames.map(function (d, i) {
+              var label = d.name;
+              if (d.make_and_model) label += ' (' + esc(d.make_and_model) + ')';
+              var badge = d.suggested_type === 'usb' ? 'Térmica' : 'Oficina';
               return '<label class="detected-item">' +
-                '<input type="radio" name="detected-printer" value="' + esc(n) + '" class="detected-radio">' +
-                '<span class="detected-name">' + esc(n) + '</span>' +
+                '<input type="radio" name="detected-printer" value="' + i + '" class="detected-radio">' +
+                '<span class="detected-name">' + esc(label) + ' <span class="badge badge-sm">' + badge + '</span></span>' +
               '</label>';
             }).join('') +
           '</div>' +
@@ -266,11 +269,12 @@
       $$('.detected-radio').forEach(function (radio) {
         radio.addEventListener('change', function () {
           if (this.checked) {
-            var name = this.value;
-            $('#pf-name').value = name;
-            $('#pf-sysname').value = name;
-            $('#pf-id').value = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-            $('#pf-type').value = 'usb';
+            var idx = parseInt(this.value, 10);
+            var d = detectedNames[idx];
+            $('#pf-name').value = d.name;
+            $('#pf-sysname').value = d.name;
+            $('#pf-id').value = d.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+            $('#pf-type').value = d.suggested_type || 'usb-office';
             togglePrinterFields();
           }
         });

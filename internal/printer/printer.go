@@ -29,6 +29,7 @@ type Info struct {
 	Port         int       `json:"port,omitempty"`
 	SystemName   string    `json:"system_name,omitempty"`
 	FilePath     string    `json:"file_path,omitempty"`
+	MakeAndModel string    `json:"make_and_model,omitempty"`
 	CodePage     string    `json:"code_page"`
 	CharsPerLine int       `json:"chars_per_line"`
 	Cut          string    `json:"cut"`

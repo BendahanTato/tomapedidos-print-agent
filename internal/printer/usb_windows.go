@@ -65,6 +65,9 @@ func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 // Close is a no-op for USBPrinter.
 func (p *USBPrinter) Close() error { return nil }
 
+// MakeAndModel returns empty on Windows (no CUPS equivalent).
+func (p *USBPrinter) MakeAndModel(ctx context.Context) string { return "" }
+
 // Ping checks whether the printer is registered in the Windows spooler.
 func (p *USBPrinter) Ping(ctx context.Context) error {
 	return p.checkExists(ctx)

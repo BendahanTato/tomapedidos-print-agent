@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -115,6 +116,35 @@ func (p *USBPrinter) lpstat(ctx context.Context) error {
 		return fmt.Errorf("lpstat -p %s: %w%s", p.systemName, err, formatStderr(out))
 	}
 	return nil
+}
+
+// MakeAndModel queries CUPS for the printer's make-and-model string.
+// Returns empty string on failure.
+func (p *USBPrinter) MakeAndModel(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "lpoptions", "-p", p.systemName)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	// Extract printer-make-and-model='...'
+	s := string(out)
+	const prefix = "printer-make-and-model="
+	idx := strings.Index(s, prefix)
+	if idx < 0 {
+		return ""
+	}
+	s = s[idx+len(prefix):]
+	// Value is single-quoted
+	if len(s) > 0 && s[0] == '\'' {
+		end := strings.Index(s[1:], "'")
+		if end >= 0 {
+			return s[1 : end+1]
+		}
+	}
+	return strings.TrimSpace(s)
 }
 
 func formatStderr(out []byte) string {

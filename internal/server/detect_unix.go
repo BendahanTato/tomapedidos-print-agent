@@ -6,13 +6,30 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+
+	"github.com/tomapedidos/print-agent/internal/printer"
 )
 
-func detectSystemPrinters(ctx context.Context) ([]string, error) {
+func detectSystemPrinters(ctx context.Context) ([]DetectedPrinter, error) {
+	names := detectPrinterNames(ctx)
+	result := make([]DetectedPrinter, 0, len(names))
+	for _, name := range names {
+		mam := queryMakeAndModel(ctx, name)
+		suggested := printer.DetectType(mam)
+		result = append(result, DetectedPrinter{
+			Name:          name,
+			MakeAndModel:  mam,
+			SuggestedType: suggested,
+		})
+	}
+	return result, nil
+}
+
+func detectPrinterNames(ctx context.Context) []string {
 	cmd := exec.CommandContext(ctx, "lpstat", "-p")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return []string{}, nil
+		return nil
 	}
 	printers := make([]string, 0)
 	seen := make(map[string]struct{})
@@ -28,13 +45,10 @@ func detectSystemPrinters(ctx context.Context) ([]string, error) {
 		}
 		parts := strings.Fields(line)
 		for _, p := range parts {
-			// Normalise: trim trailing punctuation from end.
 			p = strings.TrimRight(p, ".。．,，")
 			if p == "" || skip[p] || strings.HasPrefix(p, "activ") || strings.HasPrefix(p, "Busc") {
 				continue
 			}
-			// CUPS printer names typically contain underscores, hyphens
-			// or uppercase letters. Filter out generic Spanish words.
 			if !looksLikePrinterName(p) {
 				continue
 			}
@@ -45,8 +59,6 @@ func detectSystemPrinters(ctx context.Context) ([]string, error) {
 			break
 		}
 	}
-	// Fallback: if the locale-aware parser returned nothing, try the
-	// English-format parser as a second pass.
 	if len(printers) == 0 {
 		for _, raw := range strings.Split(string(out), "\n") {
 			parts := strings.Fields(strings.TrimSpace(raw))
@@ -58,7 +70,31 @@ func detectSystemPrinters(ctx context.Context) ([]string, error) {
 			}
 		}
 	}
-	return printers, nil
+	return printers
+}
+
+func queryMakeAndModel(ctx context.Context, systemName string) string {
+	ctx2, cancel := context.WithTimeout(ctx, 3e9)
+	defer cancel()
+	cmd := exec.CommandContext(ctx2, "lpoptions", "-p", systemName)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	s := string(out)
+	const prefix = "printer-make-and-model="
+	idx := strings.Index(s, prefix)
+	if idx < 0 {
+		return ""
+	}
+	s = s[idx+len(prefix):]
+	if len(s) > 0 && s[0] == '\'' {
+		end := strings.Index(s[1:], "'")
+		if end >= 0 {
+			return s[1 : end+1]
+		}
+	}
+	return strings.TrimSpace(s)
 }
 
 func looksLikePrinterName(s string) bool {
@@ -70,7 +106,6 @@ func looksLikePrinterName(s string) bool {
 			return true
 		}
 	}
-	// Numbers suggest a model name (e.g., TM-T20III, L3250).
 	for _, r := range s {
 		if r >= '0' && r <= '9' {
 			return true
