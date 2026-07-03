@@ -59,9 +59,10 @@ type printerInfo2 struct {
 // layer (RenderKitchen vs RenderKitchenPlainText) already produces
 // the correct format.
 type USBPrinter struct {
-	id         string
-	systemName string
-	timeout    time.Duration
+	id          string
+	systemName  string
+	timeout     time.Duration
+	printerType string
 }
 
 // NewUSB returns a USBPrinter configured for the given systemName.
@@ -79,9 +80,8 @@ func (p *USBPrinter) ID() string { return p.id }
 // SetTimeout adjusts the per-call deadline.
 func (p *USBPrinter) SetTimeout(d time.Duration) { p.timeout = d }
 
-// SetType is a no-op on Windows — winspool.drv handles raw bytes
-// regardless of printer type.
-func (p *USBPrinter) SetType(string) {}
+// SetType sets the printer type to dynamically select RAW vs TEXT data types.
+func (p *USBPrinter) SetType(t string) { p.printerType = t }
 
 // Open checks that the printer exists in the Windows spooler.
 func (p *USBPrinter) Open(ctx context.Context) error {
@@ -129,7 +129,13 @@ func (p *USBPrinter) doWrite(payload []byte) error {
 	defer procClosePrinter.Call(uintptr(handle))
 
 	docNamePtr, _ := windows.UTF16PtrFromString("Print Agent Job")
-	dataTypePtr, _ := windows.UTF16PtrFromString("RAW")
+	
+	dataType := "RAW"
+	if p.printerType == "usb-office" {
+		dataType = "TEXT"
+	}
+	dataTypePtr, _ := windows.UTF16PtrFromString(dataType)
+
 	di := docInfo1{
 		docName:    docNamePtr,
 		outputFile: nil,
