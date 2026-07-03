@@ -257,7 +257,7 @@
       detectedSection +
       '<div class="form-group"><label class="form-label">ID</label><input class="form-input" id="pf-id" value="' + esc(printer ? printer.id : '') + '" placeholder="cocina, caja, barra..."></div>' +
       '<div class="form-group"><label class="form-label">Nombre</label><input class="form-input" id="pf-name" value="' + esc(printer ? printer.name : '') + '" placeholder="Cocina"></div>' +
-      '<div class="form-group"><label class="form-label">Tipo</label><select class="form-select" id="pf-type"><option value="network">network (TCP 9100)</option><option value="usb">usb (spooler)</option><option value="usb-office">usb-office (spooler)</option><option value="file">file (debug)</option></select></div>' +
+      '<div class="form-group"><label class="form-label">Tipo</label><select class="form-select" id="pf-type"><option value="network">network (TCP 9100)</option><option value="usb">usb (spooler)</option><option value="usb-office">usb-office (spooler)</option><option value="usb-gdi">usb-gdi (windows pdf/inkjet)</option><option value="file">file (debug)</option></select></div>' +
       '<div id="pf-net"><div class="form-group"><label class="form-label">Host</label><input class="form-input" id="pf-host" value="' + esc(printer ? printer.host || '' : '') + '" placeholder="192.168.1.30"></div><div class="form-group"><label class="form-label">Port</label><input class="form-input" id="pf-port" type="number" value="' + (printer ? printer.port || 9100 : 9100) + '"></div></div>' +
       '<div id="pf-usb" class="hidden"><div class="form-group"><label class="form-label">System Name</label><input class="form-input" id="pf-sysname" value="' + esc(printer ? printer.system_name || '' : '') + '" placeholder="EPSON_TM_T20III"></div></div>' +
       '<div id="pf-file" class="hidden"><div class="form-group"><label class="form-label">File Path</label><input class="form-input" id="pf-filepath" value="' + esc(printer ? printer.file_path || '' : '') + '" placeholder="/tmp/out.bin"></div></div>' +
@@ -306,7 +306,7 @@
         };
         if (!p.id) return toast('El ID es requerido', 'error');
         if (p.type === 'network') { p.host = $('#pf-host').value.trim(); p.port = parseInt($('#pf-port').value, 10) || 9100; }
-        if (p.type === 'usb' || p.type === 'usb-office') { p.system_name = $('#pf-sysname').value.trim(); }
+        if (p.type === 'usb' || p.type === 'usb-office' || p.type === 'usb-gdi') { p.system_name = $('#pf-sysname').value.trim(); }
         if (p.type === 'file') { p.file_path = $('#pf-filepath').value.trim(); }
 
         if (isEdit) {
@@ -326,9 +326,9 @@
   function togglePrinterFields() {
     var t = $('#pf-type').value;
     $('#pf-net').classList.toggle('hidden', t !== 'network');
-    $('#pf-usb').classList.toggle('hidden', t !== 'usb' && t !== 'usb-office');
+    $('#pf-usb').classList.toggle('hidden', t !== 'usb' && t !== 'usb-office' && t !== 'usb-gdi');
     $('#pf-file').classList.toggle('hidden', t !== 'file');
-    var isOffice = t === 'usb-office';
+    var isOffice = (t === 'usb-office' || t === 'usb-gdi');
     $('#pf-cp').closest('.form-group').classList.toggle('hidden', isOffice);
     $('#pf-cpl').closest('.form-group').classList.toggle('hidden', isOffice);
     $('#pf-cut').closest('.form-group').classList.toggle('hidden', isOffice);

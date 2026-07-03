@@ -232,7 +232,8 @@ func runStart(args []string, stdout, stderr *os.File) {
 	}
 
 	// Worker pool drains the queue.
-	go queue.NewPool(q, reg, cfg.Queue, log).Run(ctx)
+	pool := queue.NewPool(q, reg, cfg.Queue, log)
+	go pool.Run(ctx)
 
 	// Heartbeat keeps Status fresh.
 	go printer.Heartbeat(ctx, reg, log, 10*time.Second, bus)
@@ -241,6 +242,7 @@ func runStart(args []string, stdout, stderr *os.File) {
 		Config:    cfgStore,
 		Registry:  reg,
 		Queue:     q,
+		Pool:      pool,
 		EventBus:  bus,
 		Log:       log,
 		StartedAt: time.Now(),

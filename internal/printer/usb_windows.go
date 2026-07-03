@@ -129,12 +129,7 @@ func (p *USBPrinter) doWrite(payload []byte) error {
 	defer procClosePrinter.Call(uintptr(handle))
 
 	docNamePtr, _ := windows.UTF16PtrFromString("Print Agent Job")
-	
-	dataType := "RAW"
-	if p.printerType == "usb-office" {
-		dataType = "TEXT"
-	}
-	dataTypePtr, _ := windows.UTF16PtrFromString(dataType)
+	dataTypePtr, _ := windows.UTF16PtrFromString("RAW")
 
 	di := docInfo1{
 		docName:    docNamePtr,

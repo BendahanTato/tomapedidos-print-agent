@@ -181,7 +181,7 @@ func submitJob(d Deps, req PrintJob) (*queue.Job, error) {
 // default kitchen template. M5 will dispatch on req.Template for cash
 // and receipt templates.
 func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
-	if info.Type == "usb-office" {
+	if info.Type == "usb-office" || info.Type == "usb-gdi" {
 		return renderOfficePlainText(req)
 	}
 	codePage := info.CodePage
