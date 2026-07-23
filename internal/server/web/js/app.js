@@ -228,36 +228,48 @@
     } catch (e) { toast('Error: ' + e.message, 'error'); }
   }
 
+  function typeLabel(t) {
+    switch (t) {
+      case 'usb': return 'Impresora Térmica USB (Comandera / Tickets)';
+      case 'network': return 'Impresora Térmica de Red (Ethernet / Wi-Fi)';
+      case 'usb-gdi': return 'Impresora de Inyección de Tinta / Láser (Windows GDI)';
+      case 'usb-office': return 'Impresora de Oficina (Texto Plano / Matricial)';
+      case 'file': return 'Archivo de prueba (Debug / Simulación)';
+      default: return t;
+    }
+  }
+
   function showPrinterModal(printer, detectedNames) {
     var isEdit = !!printer;
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
-    overlay.id = 'printer-modal';
 
     var detectedSection = '';
     if (detectedNames && detectedNames.length > 0) {
-      detectedSection =
-        '<div class="detected-section mb-2">' +
-          '<p class="text-muted mb-2">Impresoras detectadas en el OS:</p>' +
-          '<div class="detected-list">' +
-            detectedNames.map(function (d, i) {
-              var label = d.name;
-              if (d.make_and_model) label += ' (' + esc(d.make_and_model) + ')';
-              var badge = d.suggested_type === 'usb' ? 'Térmica' : 'Oficina';
-              return '<label class="detected-item">' +
-                '<input type="radio" name="detected-printer" value="' + i + '" class="detected-radio">' +
-                '<span class="detected-name">' + esc(label) + ' <span class="badge badge-sm">' + badge + '</span></span>' +
+      detectedSection = '<div class="form-group"><label class="form-label">Impresoras detectadas en el sistema:</label>' +
+        '<div class="detected-list" style="max-height:120px;overflow-y:auto;background:var(--bg-tertiary);padding:0.5rem;border-radius:4px">' +
+          detectedNames.map(function (d, i) {
+            var label = d.name + (d.make_and_model ? ' — ' + d.make_and_model : '');
+            return '<label class="flex items-center gap-1" style="cursor:pointer;margin-bottom:0.25rem">' +
+              '<input type="radio" name="detected_p" value="' + i + '" class="detected-radio"> ' +
+              '<span>' + esc(label) + ' <small class="text-muted">(' + esc(d.suggested_type || 'usb-office') + ')</small></span>' +
               '</label>';
-            }).join('') +
-          '</div>' +
-        '</div>';
+          }).join('') +
+        '</div>' +
+      '</div>';
     }
 
     overlay.innerHTML = '<div class="modal"><div class="modal-header"><span class="modal-title">' + (isEdit ? 'Editar' : 'Nueva') + ' Impresora</span><button class="modal-close">&times;</button></div>' +
       detectedSection +
       '<div class="form-group"><label class="form-label">ID</label><input class="form-input" id="pf-id" value="' + esc(printer ? printer.id : '') + '" placeholder="cocina, caja, barra..."></div>' +
       '<div class="form-group"><label class="form-label">Nombre</label><input class="form-input" id="pf-name" value="' + esc(printer ? printer.name : '') + '" placeholder="Cocina"></div>' +
-      '<div class="form-group"><label class="form-label">Tipo</label><select class="form-select" id="pf-type"><option value="network">network (TCP 9100)</option><option value="usb">usb (spooler)</option><option value="usb-office">usb-office (spooler)</option><option value="usb-gdi">usb-gdi (windows pdf/inkjet)</option><option value="file">file (debug)</option></select></div>' +
+      '<div class="form-group"><label class="form-label">Tipo</label><select class="form-select" id="pf-type">' +
+        '<option value="usb">Impresora Térmica USB (Comandera / Tickets)</option>' +
+        '<option value="network">Impresora Térmica de Red (Ethernet / Wi-Fi)</option>' +
+        '<option value="usb-gdi">Impresora de Inyección de Tinta / Láser (Windows GDI)</option>' +
+        '<option value="usb-office">Impresora de Oficina (Texto Plano / Matricial)</option>' +
+        '<option value="file">Archivo de prueba (Debug / Simulación)</option>' +
+      '</select></div>' +
       '<div id="pf-net"><div class="form-group"><label class="form-label">Host</label><input class="form-input" id="pf-host" value="' + esc(printer ? printer.host || '' : '') + '" placeholder="192.168.1.30"></div><div class="form-group"><label class="form-label">Port</label><input class="form-input" id="pf-port" type="number" value="' + (printer ? printer.port || 9100 : 9100) + '"></div></div>' +
       '<div id="pf-usb" class="hidden"><div class="form-group"><label class="form-label">System Name</label><input class="form-input" id="pf-sysname" value="' + esc(printer ? printer.system_name || '' : '') + '" placeholder="EPSON_TM_T20III"></div></div>' +
       '<div id="pf-file" class="hidden"><div class="form-group"><label class="form-label">File Path</label><input class="form-input" id="pf-filepath" value="' + esc(printer ? printer.file_path || '' : '') + '" placeholder="/tmp/out.bin"></div></div>' +

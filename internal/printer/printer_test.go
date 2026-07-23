@@ -64,3 +64,26 @@ func TestNetworkPrinterRejectsUnreachable(t *testing.T) {
 		t.Fatalf("expected Open to fail on 127.0.0.1:1")
 	}
 }
+
+func TestDetectType(t *testing.T) {
+	tests := []struct {
+		makeAndModel string
+		want         string
+	}{
+		{"NETUM 5890K-LN", "usb"},
+		{"NETUM Type 5890K", "usb"},
+		{"POS-58 Printer", "usb"},
+		{"POS58 Series", "usb"},
+		{"Epson TM-T20III", "usb"},
+		{"HP LaserJet Pro M404n", "usb-office"},
+		{"Brother HL-L2360D series", "usb-office"},
+	}
+
+	for _, tt := range tests {
+		got := DetectType(tt.makeAndModel)
+		if got != tt.want {
+			t.Errorf("DetectType(%q) = %q, want %q", tt.makeAndModel, got, tt.want)
+		}
+	}
+}
+

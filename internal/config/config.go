@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -203,9 +204,27 @@ func (s *Store) Replace(cfg Config) error {
 	return nil
 }
 
-// Validate enforces required fields and supported values. Called on load
-// and on every PUT /config.
-func (c Config) Validate() error {
+// NormalizeType maps user-friendly printer type aliases (e.g. "inkjet-laser", "thermal-usb")
+// to their canonical types ("usb", "network", "usb-gdi", "usb-office", "file").
+func NormalizeType(t string) string {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "usb", "usb-thermal", "thermal-usb", "termica-usb":
+		return "usb"
+	case "network", "network-thermal", "thermal-network", "red", "net":
+		return "network"
+	case "usb-gdi", "inkjet-laser", "inyeccion-laser", "gdi":
+		return "usb-gdi"
+	case "usb-office", "office-text", "texto-oficina", "office":
+		return "usb-office"
+	case "file", "archivo", "debug":
+		return "file"
+	default:
+		return t
+	}
+}
+
+// Validate checks the configuration for consistency and required fields.
+func (c *Config) Validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535, got %d", c.Port)
 	}
@@ -216,7 +235,9 @@ func (c Config) Validate() error {
 		return errors.New("at least one printer is required")
 	}
 	seen := make(map[string]struct{}, len(c.Printers))
-	for i, p := range c.Printers {
+	for i := range c.Printers {
+		c.Printers[i].Type = NormalizeType(c.Printers[i].Type)
+		p := c.Printers[i]
 		if p.ID == "" {
 			return fmt.Errorf("printers[%d]: id is required", i)
 		}

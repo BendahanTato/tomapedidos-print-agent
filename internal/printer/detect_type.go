@@ -11,8 +11,10 @@ func DetectType(makeAndModel string) string {
 	strongThermal := []string{
 		"tm-t", "tm-u", "tm-p", "tm-c", // Epson TM-series (T=thermal, U=impact)
 		"tsp", "tp-", // Star Micronics
-		"pos-", "rp-", // Bixolon, Citizen
+		"pos-", "pos58", "pos 58", "pos-58", "pos80", "pos 80", "pos-80", "rp-", // Bixolon, Citizen, generic POS
 		"80mm", "58mm", "76mm", // Paper width indicates receipt printer
+		"netum", "5890", "5890k", "nt-5890", // Netum thermal models
+		"zjiang", "xprinter", "munbyn", "hoin", "rongta", "gprinter", "vlink", "radall", "ziwell", "milestone", // Thermal manufacturers
 	}
 	for _, kw := range strongThermal {
 		if strings.Contains(m, kw) {
@@ -23,12 +25,15 @@ func DetectType(makeAndModel string) string {
 	// Weak thermal indicators — brand names that MAKE thermal printers
 	// but also make office printers. Only match if combined with a
 	// thermal model indicator.
-	weakThermal := []string{"epson", "star", "bixolon", "citizen", "zeworth", "npc", "gainscha"}
+	weakThermal := []string{
+		"epson", "star", "bixolon", "citizen", "zeworth", "npc", "gainscha",
+		"netum", "zjiang", "xprinter", "munbyn", "hoin", "rongta", "gprinter", "vlink",
+	}
 	for _, brand := range weakThermal {
 		if strings.Contains(m, brand) {
 			// Brand matches — but is it a thermal model?
 			// Check for receipt/thermal hints
-			thermalHints := []string{"receipt", "thermal", "pos", "printer", "tm-", "tsp"}
+			thermalHints := []string{"receipt", "thermal", "pos", "printer", "tm-", "tsp", "ticket", "58", "80"}
 			for _, hint := range thermalHints {
 				if strings.Contains(m, hint) {
 					return "usb"

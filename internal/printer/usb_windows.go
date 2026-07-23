@@ -129,7 +129,11 @@ func (p *USBPrinter) doWrite(payload []byte) error {
 	defer procClosePrinter.Call(uintptr(handle))
 
 	docNamePtr, _ := windows.UTF16PtrFromString("Print Agent Job")
-	dataTypePtr, _ := windows.UTF16PtrFromString("RAW")
+	dataTypeStr := "RAW"
+	if p.printerType == "usb-office" {
+		dataTypeStr = "TEXT"
+	}
+	dataTypePtr, _ := windows.UTF16PtrFromString(dataTypeStr)
 
 	di := docInfo1{
 		docName:    docNamePtr,
@@ -147,21 +151,33 @@ func (p *USBPrinter) doWrite(payload []byte) error {
 	}
 	defer procEndDocPrinter.Call(uintptr(handle))
 
-	ret, _, callErr = procStartPagePrinter.Call(uintptr(handle))
-	if ret == 0 {
-		return fmt.Errorf("StartPagePrinter(%s): %w", p.systemName, callErr)
+	// For RAW data type (ESC/POS thermal printing), calling StartPagePrinter/EndPagePrinter
+	// causes page-based print processors to intercept or discard raw ESC/POS byte streams.
+	// Only call StartPagePrinter if data type is TEXT.
+	if dataTypeStr == "TEXT" {
+		ret, _, callErr = procStartPagePrinter.Call(uintptr(handle))
+		if ret == 0 {
+			return fmt.Errorf("StartPagePrinter(%s): %w", p.systemName, callErr)
+		}
+		defer procEndPagePrinter.Call(uintptr(handle))
 	}
-	defer procEndPagePrinter.Call(uintptr(handle))
 
-	var written uint32
-	ret, _, callErr = procWritePrinter.Call(
-		uintptr(handle),
-		uintptr(unsafe.Pointer(&payload[0])),
-		uintptr(len(payload)),
-		uintptr(unsafe.Pointer(&written)),
-	)
-	if ret == 0 {
-		return fmt.Errorf("WritePrinter(%s): %w", p.systemName, callErr)
+	totalWritten := 0
+	for totalWritten < len(payload) {
+		var written uint32
+		ret, _, callErr = procWritePrinter.Call(
+			uintptr(handle),
+			uintptr(unsafe.Pointer(&payload[totalWritten])),
+			uintptr(len(payload)-totalWritten),
+			uintptr(unsafe.Pointer(&written)),
+		)
+		if ret == 0 {
+			return fmt.Errorf("WritePrinter(%s): %w", p.systemName, callErr)
+		}
+		if written == 0 {
+			return fmt.Errorf("WritePrinter(%s): 0 bytes written", p.systemName)
+		}
+		totalWritten += int(written)
 	}
 
 	return nil
