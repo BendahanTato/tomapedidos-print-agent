@@ -235,6 +235,81 @@ func (b *Builder) Feed(n int) *Builder {
 	return b.LineFeed(n)
 }
 
+// QRCode writes an ESC/POS 2D QR Code symbol sequence using GS ( k.
+// moduleSize is in dots (1 to 16, typically 4 to 8, defaults to 5).
+// ecLevel is the error correction level ('L', 'M', 'Q', 'H', defaults to 'M').
+func (b *Builder) QRCode(content string, moduleSize int, ecLevel byte) *Builder {
+	if content == "" {
+		return b
+	}
+	if moduleSize < 1 || moduleSize > 16 {
+		moduleSize = 5
+	}
+	var ecc byte
+	switch ecLevel {
+	case 'L', 'l':
+		ecc = 0x30
+	case 'Q', 'q':
+		ecc = 0x32
+	case 'H', 'h':
+		ecc = 0x33
+	default:
+		ecc = 0x31 // 'M'
+	}
+
+	data := []byte(content)
+	dataLen := len(data) + 3
+	pL := byte(dataLen & 0xFF)
+	pH := byte((dataLen >> 8) & 0xFF)
+
+	// 1. Select Model: Model 2 (Function 165)
+	// GS ( k 0x04 0x00 0x31 0x41 0x32 0x00
+	b.buf.Write([]byte{gs, '(', 'k', 0x04, 0x00, 0x31, 0x41, 0x32, 0x00})
+
+	// 2. Set Module Size (Function 167)
+	// GS ( k 0x03 0x00 0x31 0x43 n
+	b.buf.Write([]byte{gs, '(', 'k', 0x03, 0x00, 0x31, 0x43, byte(moduleSize)})
+
+	// 3. Set Error Correction Level (Function 169)
+	// GS ( k 0x03 0x00 0x31 0x45 n
+	b.buf.Write([]byte{gs, '(', 'k', 0x03, 0x00, 0x31, 0x45, ecc})
+
+	// 4. Store Data in Symbol Storage (Function 180)
+	// GS ( k pL pH 0x31 0x50 0x30 d1...dk
+	b.buf.Write([]byte{gs, '(', 'k', pL, pH, 0x31, 0x50, 0x30})
+	b.buf.Write(data)
+
+	// 5. Print Symbol (Function 181)
+	// GS ( k 0x03 0x00 0x31 0x51 0x30
+	b.buf.Write([]byte{gs, '(', 'k', 0x03, 0x00, 0x31, 0x51, 0x30})
+
+	return b
+}
+
+// RasterImage emits a monochrome bit image using GS v 0.
+// width is the pixel width and height is the pixel height.
+// data contains (widthBytes * height) bytes packed 8 dots per byte (MSB first).
+func (b *Builder) RasterImage(width, height int, data []byte) *Builder {
+	if width <= 0 || height <= 0 || len(data) == 0 {
+		return b
+	}
+	widthBytes := (width + 7) / 8
+	expectedLen := widthBytes * height
+	if len(data) < expectedLen {
+		return b
+	}
+
+	xL := byte(widthBytes & 0xFF)
+	xH := byte((widthBytes >> 8) & 0xFF)
+	yL := byte(height & 0xFF)
+	yH := byte((height >> 8) & 0xFF)
+
+	// GS v 0 m xL xH yL yH
+	b.buf.Write([]byte{gs, 'v', '0', 0x00, xL, xH, yL, yH})
+	b.buf.Write(data[:expectedLen])
+	return b
+}
+
 // ErrEmptyPayload is returned by RenderKitchen when the builder would
 // produce no output (e.g. no items and no header).
 var ErrEmptyPayload = errors.New("escpos: nothing to print")

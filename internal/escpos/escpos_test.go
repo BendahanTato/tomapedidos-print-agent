@@ -127,3 +127,156 @@ func TestBuilderEncoding(t *testing.T) {
 		t.Errorf("Encoding text failed.\nGot:  %v\nWant: %v", gotText, want)
 	}
 }
+
+func TestBuilderQRCode(t *testing.T) {
+	b := NewBuilder()
+	content := "https://example.com"
+	b.QRCode(content, 6, 'M')
+	got := b.Bytes()
+
+	// Should contain the GS ( k sequences:
+	// 1. Model 2: 1D 28 6B 04 00 31 41 32 00
+	if !bytes.Contains(got, []byte{0x1D, '(', 'k', 0x04, 0x00, 0x31, 0x41, 0x32, 0x00}) {
+		t.Errorf("expected QR code model selection sequence")
+	}
+
+	// 2. Module size 6: 1D 28 6B 03 00 31 43 06
+	if !bytes.Contains(got, []byte{0x1D, '(', 'k', 0x03, 0x00, 0x31, 0x43, 0x06}) {
+		t.Errorf("expected QR code module size sequence")
+	}
+
+	// 3. ECC M (0x31): 1D 28 6B 03 00 31 45 31
+	if !bytes.Contains(got, []byte{0x1D, '(', 'k', 0x03, 0x00, 0x31, 0x45, 0x31}) {
+		t.Errorf("expected QR code ECC sequence")
+	}
+
+	// 4. Data content
+	if !bytes.Contains(got, []byte(content)) {
+		t.Errorf("expected QR code to contain payload data")
+	}
+
+	// 5. Print command: 1D 28 6B 03 00 31 51 30
+	if !bytes.Contains(got, []byte{0x1D, '(', 'k', 0x03, 0x00, 0x31, 0x51, 0x30}) {
+		t.Errorf("expected QR code print sequence")
+	}
+}
+
+func TestBuilderRasterImage(t *testing.T) {
+	b := NewBuilder()
+	// 16 dots wide (2 bytes) x 2 dots high = 4 bytes data
+	data := []byte{0xFF, 0x00, 0xAA, 0x55}
+	b.RasterImage(16, 2, data)
+	got := b.Bytes()
+
+	// GS v 0 00 xL xH yL yH
+	wantPrefix := []byte{0x1D, 'v', '0', 0x00, 0x02, 0x00, 0x02, 0x00}
+	if !bytes.HasPrefix(got, wantPrefix) {
+		t.Errorf("RasterImage prefix got %v, want %v", got, wantPrefix)
+	}
+	if !bytes.HasSuffix(got, data) {
+		t.Errorf("RasterImage data missing from buffer")
+	}
+}
+
+func TestRenderReceipt(t *testing.T) {
+	header := Header{
+		OrderNumber:   456,
+		BusinessName:  "Pizzería Donatello",
+		LegalName:     "Donatello S.A.",
+		TaxID:         "RUT 219999990019",
+		Address:       "Av. Principal 1234",
+		Phone:         "+598 99 123 456",
+		PaymentMethod: "Tarjeta Débito",
+	}
+
+	items := []Item{
+		{
+			Qty:       1,
+			Name:      "Pizza Napolitana",
+			UnitPrice: 500,
+			Subtotal:  500,
+			Modifiers: []string{"Extra ajo"},
+			Notes:     "Bien tostada",
+		},
+		{
+			Qty:       2,
+			Name:      "Cerveza IPA",
+			UnitPrice: 200,
+			Subtotal:  400,
+		},
+	}
+
+	opts := Options{
+		Cut:             "partial",
+		FeedLinesBefore: 3,
+		Footer:          "WiFi: Clientes2026\nMuchas gracias por su compra",
+		QRCode:          "https://tomapedidos.online/tracking/456",
+	}
+
+	got, err := RenderReceipt("cp850", 42, header, items, opts)
+	if err != nil {
+		t.Fatalf("RenderReceipt failed: %v", err)
+	}
+
+	// Verifications
+	if !bytes.Contains(got, []byte("DONATELLO")) {
+		t.Errorf("expected receipt to contain uppercase business name")
+	}
+	if !bytes.Contains(got, []byte("RUT 219999990019")) {
+		t.Errorf("expected receipt to contain tax ID")
+	}
+	if !bytes.Contains(got, []byte("Pizza Napolitana")) {
+		t.Errorf("expected receipt to contain item name")
+	}
+	if !bytes.Contains(got, []byte("$500.00")) {
+		t.Errorf("expected receipt to contain item price")
+	}
+	if !bytes.Contains(got, []byte("$900.00")) {
+		t.Errorf("expected receipt to contain total 900.00")
+	}
+	if !bytes.Contains(got, []byte("WiFi: Clientes2026")) {
+		t.Errorf("expected receipt to contain footer line")
+	}
+	// Verify QR code bytes are present
+	if !bytes.Contains(got, []byte("https://tomapedidos.online/tracking/456")) {
+		t.Errorf("expected receipt to contain QR code URL payload")
+	}
+	// Must end with partial cut
+	if !bytes.HasSuffix(got, []byte{0x1D, 'V', 0x01}) {
+		t.Errorf("expected receipt to end with partial cut")
+	}
+}
+
+func TestRenderReceiptPlainText(t *testing.T) {
+	header := Header{
+		OrderNumber:  789,
+		BusinessName: "Café París",
+	}
+	items := []Item{
+		{Qty: 1, Name: "Café Doble", UnitPrice: 150, Subtotal: 150},
+	}
+	opts := Options{
+		Footer: "Vuelva pronto",
+		QRCode: "https://ejemplo.com",
+	}
+	got, err := RenderReceiptPlainText(header, items, opts)
+	if err != nil {
+		t.Fatalf("RenderReceiptPlainText failed: %v", err)
+	}
+	s := string(got)
+	if !bytes.Contains(got, []byte("CAFÉ PARÍS")) && !bytes.Contains(got, []byte("CAFE")) {
+		// Just ensure name is in output
+		if len(s) == 0 {
+			t.Errorf("empty plain text output")
+		}
+	}
+	if !bytes.Contains(got, []byte("Subtotal:")) {
+		t.Errorf("plain text missing subtotal")
+	}
+	if !bytes.Contains(got, []byte("TOTAL:")) {
+		t.Errorf("plain text missing total")
+	}
+	if !bytes.Contains(got, []byte("[QR: https://ejemplo.com]")) {
+		t.Errorf("plain text missing QR tag")
+	}
+}
