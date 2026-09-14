@@ -14,7 +14,7 @@ set -euo pipefail
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo '0.1.0-dev')}"
 COMMIT="${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')}"
 BUILDTIME="${BUILDTIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
-LDFLAGS="-X github.com/tomapedidos/print-agent/internal/version.Version=${VERSION} -X github.com/tomapedidos/print-agent/internal/version.Commit=${COMMIT} -X github.com/tomapedidos/print-agent/internal/version.BuildTime=${BUILDTIME} -s -w"
+BASE_LDFLAGS="-X github.com/tomapedidos/print-agent/internal/version.Version=${VERSION} -X github.com/tomapedidos/print-agent/internal/version.Commit=${COMMIT} -X github.com/tomapedidos/print-agent/internal/version.BuildTime=${BUILDTIME}"
 
 mkdir -p dist
 
@@ -32,10 +32,15 @@ build_one() {
   GOOS="${target%/*}"
   GOARCH="${target#*/}"
   local out="dist/print-agent-${GOOS}-${GOARCH}"
-  if [ "${GOOS}" = "windows" ]; then out="${out}.exe"; fi
+  local ldflags="${BASE_LDFLAGS} -s -w"
+  if [ "${GOOS}" = "windows" ]; then
+    out="${out}.exe"
+    # Preservar símbolos en Windows para evitar falsos positivos de antivirus (Avast IDP.Generic / Defender)
+    ldflags="${BASE_LDFLAGS}"
+  fi
   echo "  -> ${out}"
   CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" \
-    go build -trimpath -ldflags "${LDFLAGS}" -o "${out}" ./cmd/print-agent
+    go build -buildvcs=false -trimpath -ldflags "${ldflags}" -o "${out}" ./cmd/print-agent
 }
 
 echo "=== cross-compile ${VERSION}"

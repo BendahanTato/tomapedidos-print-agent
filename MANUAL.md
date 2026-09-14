@@ -21,7 +21,7 @@ hardware.
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tomapedidos/print-agent/main/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.sh | bash
 ```
 
 Esto:
@@ -34,19 +34,19 @@ Esto:
 ### Windows PowerShell (como administrador)
 
 ```powershell
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/tomapedidos/print-agent/main/install/install.ps1 | Invoke-Expression
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.ps1 -UseBasicParsing | Invoke-Expression
 ```
 
 Esto:
-1. Descarga `print-agent-windows-amd64.exe` a `%APPDATA%\tomapedidos\`.
+1. Descarga `print-agent-windows-amd64.exe` a `%LOCALAPPDATA%\tomapedidos\`.
 2. Crea una config de ejemplo.
-3. Registra el servicio con `sc create`.
+3. Registra el servicio de Windows.
 4. Lo arranca.
 
 ### Descarga manual
 
 Si preferís bajar el binario a mano, entrá a la página de
-[Releases](https://github.com/tomapedidos/print-agent/releases) y elegí
+[Releases](https://github.com/BendahanTato/tomapedidos-print-agent/releases) y elegí
 el `.exe`/`.bin` que corresponda a tu SO.
 
 ---

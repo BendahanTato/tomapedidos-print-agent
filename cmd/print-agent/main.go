@@ -22,6 +22,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -49,6 +50,15 @@ const (
 )
 
 func main() {
+	if isSvc, _ := service.IsWindowsService(); isSvc {
+		args := os.Args[1:]
+		if len(args) > 0 && args[0] == "start" {
+			args = args[1:]
+		}
+		runService(args)
+		return
+	}
+
 	if len(os.Args) < 2 {
 		runStart(os.Args[1:], os.Stdout, os.Stderr)
 		return
@@ -154,6 +164,19 @@ func hasLoopback() bool {
 	return true
 }
 
+func runService(args []string) {
+	fs := flag.NewFlagSet("service", flag.ContinueOnError)
+	configPath := fs.String("config", defaultConfigPath, "path to config JSON")
+	port := fs.Int("port", 0, "override listen port")
+	bind := fs.String("bind", "", "override bind address")
+	logLevel := fs.String("log-level", defaultLogLevel, "log level (debug|info|warn|error)")
+	_ = fs.Parse(args)
+
+	_ = service.RunAsService(service.Label, func(ctx context.Context) error {
+		return runAgent(ctx, *configPath, *port, *bind, *logLevel, os.Stdout, os.Stderr)
+	})
+}
+
 func runStart(args []string, stdout, stderr *os.File) {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to config JSON")
@@ -162,28 +185,35 @@ func runStart(args []string, stdout, stderr *os.File) {
 	logLevel := fs.String("log-level", defaultLogLevel, "log level (debug|info|warn|error)")
 	_ = fs.Parse(args)
 
-	log := logging.New(logging.Level(*logLevel), "print-agent", version.Version)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
-	cfgStore, err := config.Load(*configPath, true)
+	if err := runAgent(ctx, *configPath, *port, *bind, *logLevel, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "agent failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runAgent(ctx context.Context, configPath string, port int, bind string, logLevel string, stdout, stderr io.Writer) error {
+	log := logging.New(logging.Level(logLevel), "print-agent", version.Version)
+
+	cfgStore, err := config.Load(configPath, true)
 	if err != nil {
 		log.Error("config load failed", slog.String("error", err.Error()))
 		fmt.Fprintf(stderr, "config load failed: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	log.Info("config loaded", slog.String("path", cfgStore.Path()))
 
 	cfg := cfgStore.Get()
 	listenHost := cfg.Bind
-	if *bind != "" {
-		listenHost = *bind
+	if bind != "" {
+		listenHost = bind
 	}
 	listenPort := cfg.Port
-	if *port > 0 {
-		listenPort = *port
+	if port > 0 {
+		listenPort = port
 	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	reg := printer.NewRegistry()
 	for _, p := range cfg.Printers {
@@ -220,7 +250,7 @@ func runStart(args []string, stdout, stderr *os.File) {
 	if err != nil {
 		log.Error("queue init failed", slog.String("error", err.Error()))
 		fmt.Fprintf(stderr, "queue init failed: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer func() {
 		if err := q.Close(); err != nil {
@@ -259,7 +289,7 @@ func runStart(args []string, stdout, stderr *os.File) {
 	if err != nil {
 		log.Error("listen failed", slog.String("addr", addr), slog.String("error", err.Error()))
 		fmt.Fprintf(stderr, "listen %s: %v\n", addr, err)
-		os.Exit(1)
+		return err
 	}
 	log.Info("listening", slog.String("addr", addr))
 
@@ -272,9 +302,10 @@ func runStart(args []string, stdout, stderr *os.File) {
 
 	if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server crashed", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
 	}
 	log.Info("bye")
+	return nil
 }
 
 // ---------------------------------------------------------------------------
