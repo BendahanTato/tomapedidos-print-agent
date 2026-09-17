@@ -1,0 +1,12 @@
+{{esc "center"}}{{size 2 2}}{{esc "bold"}}COCINA #{{.Header.OrderNumber}}{{size 1 1}}{{esc "normal"}}
+{{if .Header.CreatedAt}}{{.Header.CreatedAt | formatTime}}{{end}}
+{{if .Header.DeliveryType}}{{.Header.DeliveryType | deliveryLabel}}{{end}}
+{{esc "left"}}{{sep "-"}}
+{{if .Header.CustomerName}}Cliente: {{.Header.CustomerName}}
+{{end}}{{if .Header.CustomerPhone}}Tel: {{.Header.CustomerPhone}}
+{{end}}{{if .Header.Address}}Dir: {{.Header.Address}}
+{{end}}{{sep "-"}}
+{{range .Items}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{esc "bold"}}{{.Qty | formatQty}} {{esc "normal"}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{.Name | truncate}}{{size 1 1}}
+{{range .Modifiers}}  - {{.}}
+{{end}}{{if .Notes}}  OBS: {{.Notes}}
+{{end}}{{esc "normal"}}{{end}}{{sep "-"}}

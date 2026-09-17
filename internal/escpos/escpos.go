@@ -154,6 +154,20 @@ func (b *Builder) DoubleSize(on bool) *Builder {
 	return b
 }
 
+// DoubleHeight toggles the 2x height flag (GS ! n).
+func (b *Builder) DoubleHeight(on bool) *Builder {
+	var n byte
+	if on {
+		n = 0x01 // 2x height
+	} else {
+		n = 0x00
+	}
+	b.buf.WriteByte(gs)
+	b.buf.WriteByte('!')
+	b.buf.WriteByte(n)
+	return b
+}
+
 // SelectCodePage issues ESC t n with the value looked up from the table in
 // codepages.go. Unknown names return an error and the builder is left
 // untouched.

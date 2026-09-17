@@ -3,7 +3,10 @@ package escpos
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -37,12 +40,13 @@ type Header struct {
 // Options controls the trailing behavior of every template (cut, kick,
 // feed lines, custom footer, and QR code).
 type Options struct {
-	Cut             string // "partial" | "full" | "none"
-	OpenCashDrawer  bool
-	Copies          int
-	FeedLinesBefore int
-	Footer          string
-	QRCode          string
+	Cut              string // "partial" | "full" | "none"
+	OpenCashDrawer   bool
+	Copies           int
+	FeedLinesBefore  int
+	ItemDoubleHeight bool
+	Footer           string
+	QRCode           string
 }
 
 // formatTime renders a timestamp as "YYYY-MM-DD HH:MM" in the local timezone.
@@ -76,10 +80,28 @@ func deliveryLabel(t string) string {
 	}
 }
 
-// RenderKitchen produces the bytes for a kitchen/bar ticket. The format is
-// intentionally minimal: large order number, item list with modifiers and
-// notes, no prices, no customer info beyond name and address.
-func RenderKitchen(codePage string, charsPerLine int, h Header, items []Item, opts Options) ([]byte, error) {
+const defaultKitchenTemplate = `{{esc "center"}}{{size 2 2}}{{esc "bold"}}PEDIDO #{{.Header.OrderNumber}}{{size 1 1}}{{esc "normal"}}
+{{if .Header.CreatedAt}}{{.Header.CreatedAt | formatTime}}{{end}}
+{{if .Header.DeliveryType}}{{.Header.DeliveryType | deliveryLabel}}{{end}}
+{{esc "left"}}{{sep "-"}}
+{{if .Header.CustomerName}}Cliente: {{.Header.CustomerName}}
+{{end}}{{if .Header.CustomerPhone}}Tel: {{.Header.CustomerPhone}}
+{{end}}{{if .Header.Address}}Dir: {{.Header.Address}}
+{{end}}{{sep "-"}}
+{{range .Items}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{esc "bold"}}{{.Qty | formatQty}} {{esc "normal"}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{.Name | truncate}}{{size 1 1}}
+{{range .Modifiers}}  - {{.}}
+{{end}}{{if .Notes}}  OBS: {{.Notes}}
+{{end}}{{esc "normal"}}{{end}}{{sep "-"}}`
+
+type templateData struct {
+	Header Header
+	Items  []Item
+	Opts   Options
+}
+
+// RenderTemplate produces the bytes for a ticket by evaluating a text/template.
+// It searches for "templates/<templateName>.tmpl" and falls back to a default.
+func RenderTemplate(templateName string, codePage string, charsPerLine int, h Header, items []Item, opts Options) ([]byte, error) {
 	if len(items) == 0 {
 		return nil, ErrEmptyPayload
 	}
@@ -87,49 +109,93 @@ func RenderKitchen(codePage string, charsPerLine int, h Header, items []Item, op
 	if width <= 0 {
 		width = 42
 	}
+
+	funcMap := template.FuncMap{
+		"esc": func(cmd string) string {
+			switch cmd {
+			case "bold":
+				return "\x1bE\x01"
+			case "normal":
+				return "\x1bE\x00\x1b-\x00\x1d!\x00\x1ba\x00"
+			case "center":
+				return "\x1ba\x01"
+			case "left":
+				return "\x1ba\x00"
+			case "right":
+				return "\x1ba\x02"
+			case "double_size":
+				return "\x1d!\x11"
+			case "double_height":
+				return "\x1d!\x01"
+			case "double_width":
+				return "\x1d!\x10"
+			default:
+				return ""
+			}
+		},
+		"size": func(w, h int) string {
+			if w < 1 { w = 1 }
+			if w > 8 { w = 8 }
+			if h < 1 { h = 1 }
+			if h > 8 { h = 8 }
+			n := byte(((w - 1) << 4) | (h - 1))
+			return fmt.Sprintf("\x1d!%c", n)
+		},
+		"sep": func(char string) string {
+			return strings.Repeat(char, width) + "\n"
+		},
+		"formatTime": formatTime,
+		"formatQty":  formatQty,
+		"formatMoney": func(v float64) string {
+			return fmt.Sprintf("$%.2f", v)
+		},
+		"deliveryLabel": deliveryLabel,
+		"truncate": func(s string) string {
+			return truncate(s, width-4)
+		},
+	}
+
+	tmplName := templateName
+	if tmplName == "" {
+		tmplName = "kitchen"
+	}
+	
+	tmplPath := filepath.Join("templates", tmplName+".tmpl")
+	
+	tmpl := template.New(tmplName).Funcs(funcMap)
+	body, err := os.ReadFile(tmplPath)
+	if err != nil {
+		// Fallback to default.tmpl on disk
+		defaultPath := filepath.Join("templates", "default.tmpl")
+		body, err = os.ReadFile(defaultPath)
+	}
+
+	if err == nil {
+		tmpl, err = tmpl.Parse(string(body))
+		if err != nil {
+			return nil, fmt.Errorf("parse template %s: %w", tmplPath, err)
+		}
+	} else {
+		// Fallback to hardcoded string
+		tmpl, err = tmpl.Parse(defaultKitchenTemplate)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var buf bytes.Buffer
+	data := templateData{Header: h, Items: items, Opts: opts}
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return nil, fmt.Errorf("execute template: %w", err)
+	}
+
 	b := NewBuilder()
 	if err := b.SelectCodePage(codePage); err != nil {
 		return nil, err
 	}
 	b.Initialize()
 
-	b.Alignment(1).Bold(true).DoubleSize(true)
-	b.TextLine(fmt.Sprintf("PEDIDO #%d", h.OrderNumber))
-	b.DoubleSize(false).Bold(false)
-
-	if t := formatTime(h.CreatedAt); t != "" {
-		b.Alignment(1).TextLine(t)
-	}
-	if d := deliveryLabel(h.DeliveryType); d != "" {
-		b.Alignment(1).TextLine(d)
-	}
-	b.Separator("-", width)
-
-	if h.CustomerName != "" {
-		b.Alignment(0)
-		b.TextLine("Cliente: " + h.CustomerName)
-	}
-	if h.CustomerPhone != "" {
-		b.TextLine("Tel: " + h.CustomerPhone)
-	}
-	if h.Address != "" {
-		b.TextLine("Dir: " + h.Address)
-	}
-	b.Separator("-", width)
-
-	for _, it := range items {
-		b.Bold(true)
-		b.Text(formatQty(it.Qty) + " ")
-		b.Bold(false)
-		b.TextLine(truncate(it.Name, width-4))
-		for _, m := range it.Modifiers {
-			b.TextLine("  - " + m)
-		}
-		if it.Notes != "" {
-			b.TextLine("  OBS: " + it.Notes)
-		}
-	}
-	b.Separator("-", width)
+	b.Text(buf.String())
 
 	if opts.Footer != "" {
 		b.Alignment(1)

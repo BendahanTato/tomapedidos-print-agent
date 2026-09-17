@@ -22,22 +22,23 @@ const (
 
 // Info is the runtime snapshot exposed via /printers and /health.
 type Info struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Type         string    `json:"type"`
-	Host         string    `json:"host,omitempty"`
-	Port         int       `json:"port,omitempty"`
-	SystemName   string    `json:"system_name,omitempty"`
-	FilePath     string    `json:"file_path,omitempty"`
-	MakeAndModel string    `json:"make_and_model,omitempty"`
-	CodePage     string    `json:"code_page"`
-	CharsPerLine int       `json:"chars_per_line"`
-	Cut          string    `json:"cut"`
-	Status       Status    `json:"status"`
-	QueueDepth   int       `json:"queue_depth"`
-	LastPrintAt  time.Time `json:"last_print_at"`
-	LastError    string    `json:"last_error,omitempty"`
-	LastSeenAt   time.Time `json:"last_seen_at"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Type             string    `json:"type"`
+	Host             string    `json:"host,omitempty"`
+	Port             int       `json:"port,omitempty"`
+	SystemName       string    `json:"system_name,omitempty"`
+	FilePath         string    `json:"file_path,omitempty"`
+	MakeAndModel     string    `json:"make_and_model,omitempty"`
+	CodePage         string    `json:"code_page"`
+	CharsPerLine     int       `json:"chars_per_line"`
+	Cut              string    `json:"cut"`
+	ItemDoubleHeight bool      `json:"item_double_height"`
+	Status           Status    `json:"status"`
+	QueueDepth       int       `json:"queue_depth"`
+	LastPrintAt      time.Time `json:"last_print_at"`
+	LastError        string    `json:"last_error,omitempty"`
+	LastSeenAt       time.Time `json:"last_seen_at"`
 }
 
 // Printer is the contract every concrete backend (network, usb, file) must

@@ -1,0 +1,15 @@
+{{esc "center"}}{{size 2 2}}{{esc "bold"}}TICKET DE CAJA{{size 1 1}}{{esc "normal"}}
+PEDIDO #{{.Header.OrderNumber}}
+{{if .Header.CreatedAt}}{{.Header.CreatedAt | formatTime}}{{end}}
+{{if .Header.DeliveryType}}{{.Header.DeliveryType | deliveryLabel}}{{end}}
+{{esc "left"}}{{sep "="}}
+{{if .Header.CustomerName}}Cliente: {{.Header.CustomerName}}
+{{end}}{{if .Header.CustomerPhone}}Tel: {{.Header.CustomerPhone}}
+{{end}}{{if .Header.Address}}Dir: {{.Header.Address}}
+{{end}}{{sep "="}}
+{{range .Items}}{{esc "bold"}}{{.Qty | formatQty}} {{.Name | truncate}}{{esc "normal"}}
+  {{.Subtotal | formatMoney}}
+{{range .Modifiers}}  - {{.}}
+{{end}}{{end}}{{sep "="}}
+{{if .Header.PaymentMethod}}Pago: {{.Header.PaymentMethod}}
+{{end}}{{esc "center"}}¡Gracias por su compra!{{esc "normal"}}
