@@ -3,9 +3,9 @@
 package service
 
 import (
+	"context"
 	"fmt"
-	"os/exec"
-	"strings"
+	"time"
 
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -19,40 +19,95 @@ func New() Manager {
 	return &scmManager{label: Label}
 }
 
-// Install creates a Windows service via SCM. The binary is registered
-// with the start subcommand and auto-start set to demand (the user
-// explicitly starts it after install, or sets auto-start later).
+// Install creates a Windows service via SCM using the Win32 API.
 func (m *scmManager) Install(exePath, configPath string) error {
-	// sc.exe (built into Windows) is the canonical way to create a
-	// service; we use it because golang.org/x/sys/windows/svc/mgr
-	// requires admin privileges for CreateService.
-	args := fmt.Sprintf(
-		`create %s binPath="%s start --config %s" start=demand DisplayName="TomaPedidos Print Agent"`,
-		m.label, exePath, configPath,
-	)
-	cmd := exec.Command("sc", strings.Fields(args)...)
-	out, err := cmd.CombinedOutput()
+	sm, closer, err := connect()
 	if err != nil {
-		return fmt.Errorf("sc create: %w\n%s", err, out)
+		return fmt.Errorf("connect SCM: %w", err)
 	}
+	defer closer.Close()
+
+	s, err := sm.OpenService(m.label)
+	if err == nil {
+		s.Close()
+		return fmt.Errorf("service %q already exists", m.label)
+	}
+
+	cfg := mgr.Config{
+		DisplayName: "TomaPedidos Print Agent",
+		Description: "Servicio local de impresion para TomaPedidos",
+		StartType:   mgr.StartAutomatic,
+	}
+
+	s, err = sm.CreateService(m.label, exePath, cfg, "start", "--config", configPath)
+	if err != nil {
+		return fmt.Errorf("create service %q: %w", m.label, err)
+	}
+	defer s.Close()
 	return nil
 }
 
 // Uninstall stops and deletes the service.
 func (m *scmManager) Uninstall() error {
-	_ = m.Stop()
-	_ = run("sc", "delete", m.label)
+	sm, closer, err := connect()
+	if err != nil {
+		return fmt.Errorf("connect SCM: %w", err)
+	}
+	defer closer.Close()
+
+	s, err := sm.OpenService(m.label)
+	if err != nil {
+		return nil // Not installed
+	}
+	defer s.Close()
+
+	// Stop if running
+	_, _ = s.Control(svc.Stop)
+
+	if err := s.Delete(); err != nil {
+		return fmt.Errorf("delete service %q: %w", m.label, err)
+	}
 	return nil
 }
 
-// Start invokes sc start.
+// Start invokes SCM StartService.
 func (m *scmManager) Start() error {
-	return run("sc", "start", m.label)
+	sm, closer, err := connect()
+	if err != nil {
+		return fmt.Errorf("connect SCM: %w", err)
+	}
+	defer closer.Close()
+
+	s, err := sm.OpenService(m.label)
+	if err != nil {
+		return fmt.Errorf("open service %q: %w", m.label, err)
+	}
+	defer s.Close()
+
+	if err := s.Start(); err != nil {
+		return fmt.Errorf("start service %q: %w", m.label, err)
+	}
+	return nil
 }
 
-// Stop invokes sc stop.
+// Stop invokes SCM Stop.
 func (m *scmManager) Stop() error {
-	return run("sc", "stop", m.label)
+	sm, closer, err := connect()
+	if err != nil {
+		return fmt.Errorf("connect SCM: %w", err)
+	}
+	defer closer.Close()
+
+	s, err := sm.OpenService(m.label)
+	if err != nil {
+		return fmt.Errorf("open service %q: %w", m.label, err)
+	}
+	defer s.Close()
+
+	if _, err := s.Control(svc.Stop); err != nil {
+		return fmt.Errorf("stop service %q: %w", m.label, err)
+	}
+	return nil
 }
 
 // Status queries the service state via SCM.
@@ -99,11 +154,55 @@ func (c *closerFunc) Close() error {
 	return nil
 }
 
-func run(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s %v: %w\n%s", name, args, err, out)
+// IsWindowsService reports whether the process is executing as a Windows service.
+func IsWindowsService() (bool, error) {
+	return svc.IsWindowsService()
+}
+
+type agentService struct {
+	runFunc func(ctx context.Context) error
+}
+
+func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
+	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
+	changes <- svc.Status{State: svc.StartPending}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.runFunc(ctx)
+	}()
+
+	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
+
+	for {
+		select {
+		case err := <-errCh:
+			changes <- svc.Status{State: svc.StopPending}
+			if err != nil {
+				return true, 1
+			}
+			return false, 0
+		case c := <-r:
+			switch c.Cmd {
+			case svc.Interrogate:
+				changes <- c.CurrentStatus
+			case svc.Stop, svc.Shutdown:
+				changes <- svc.Status{State: svc.StopPending}
+				cancel()
+				select {
+				case <-errCh:
+				case <-time.After(10 * time.Second):
+				}
+				return false, 0
+			}
+		}
 	}
-	return nil
+}
+
+// RunAsService executes the service handler if running under Windows SCM.
+func RunAsService(name string, runFunc func(ctx context.Context) error) error {
+	return svc.Run(name, &agentService{runFunc: runFunc})
 }

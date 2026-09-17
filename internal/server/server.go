@@ -219,8 +219,8 @@ func configPutHandler(d Deps) http.HandlerFunc {
 		// Reconcile the registry with the new config so newly added
 		// printers are available immediately without a restart.
 		added := printer.SyncFromConfig(r.Context(), d.Registry, d.Config.Get(), d.Log)
-		if d.Pool != nil {
-			for _, id := range added {
+		for _, id := range added {
+			if d.Pool != nil {
 				d.Pool.Add(r.Context(), id)
 			}
 		}

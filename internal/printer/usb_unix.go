@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -76,6 +77,8 @@ func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
 
 // waitForDrain polls lpstat until the pending queue for this printer
 // is empty (job was printed or errored out) or the context expires.
+// In case of timeout, we log a warning and return nil (success) because
+// the job has been accepted by the OS spooler, preventing duplicated retries.
 func (p *USBPrinter) waitForDrain(ctx context.Context) error {
 	deadline, ok := ctx.Deadline()
 	if !ok {
@@ -83,7 +86,8 @@ func (p *USBPrinter) waitForDrain(ctx context.Context) error {
 	}
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
-			return fmt.Errorf("timeout waiting for printer %s to finish", p.systemName)
+			log.Printf("WARNING: timeout waiting for printer %s to finish draining (CUPS accepted the job)", p.systemName)
+			return nil
 		}
 		// Check if there are still pending jobs for this printer.
 		cmd := exec.CommandContext(ctx, "lpstat", "-o", p.systemName)
@@ -94,7 +98,8 @@ func (p *USBPrinter) waitForDrain(ctx context.Context) error {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("timeout: printer %s queue not draining (printer may be disconnected)", p.systemName)
+	log.Printf("WARNING: timeout: printer %s queue not draining (CUPS accepted the job but it may be stuck or printer disconnected)", p.systemName)
+	return nil
 }
 
 // Close is a no-op for USBPrinter. The spooler session is per-Write.

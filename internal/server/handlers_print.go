@@ -16,10 +16,11 @@ import (
 type PrintJob struct {
 	JobID      string      `json:"job_id,omitempty"`
 	PrinterID  string      `json:"printer_id"`
-	Template   string      `json:"template,omitempty"` // currently "kitchen" only
+	Template   string      `json:"template,omitempty"` // "kitchen" | "cash" | "receipt"
 	Header     PrintHeader `json:"header"`
 	Items      []PrintItem `json:"items"`
 	Footer     string      `json:"footer,omitempty"`
+	QRCode     string      `json:"qr_code,omitempty"`
 	Options    PrintOpts   `json:"options,omitempty"`
 }
 
@@ -34,6 +35,12 @@ type PrintHeader struct {
 	DeliveryType    string `json:"delivery_type,omitempty"`
 	PaymentMethod   string `json:"payment_method,omitempty"`
 	CreatedAt       string `json:"created_at"` // RFC3339, optional
+	LogoURL         string `json:"logo_url,omitempty"`
+	Notes           string `json:"notes,omitempty"`
+	BusinessName    string `json:"business_name,omitempty"`
+	LegalName       string `json:"legal_name,omitempty"`
+	TaxID           string `json:"tax_id,omitempty"`
+	Phone           string `json:"phone,omitempty"`
 }
 
 // PrintItem mirrors escpos.Item. UnitPrice/Subtotal are reserved for the
@@ -178,10 +185,9 @@ func submitJob(d Deps, req PrintJob) (*queue.Job, error) {
 }
 
 // renderToBytes turns the request payload into ESC/POS bytes using the
-// default kitchen template. M5 will dispatch on req.Template for cash
-// and receipt templates.
+// appropriate template (kitchen vs receipt/cash).
 func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
-	if info.Type == "usb-office" {
+	if info.Type == "usb-office" || info.Type == "usb-gdi" {
 		return renderOfficePlainText(req)
 	}
 	codePage := info.CodePage
@@ -199,6 +205,12 @@ func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
 		Address:       req.Header.CustomerAddress,
 		DeliveryType:  req.Header.DeliveryType,
 		PaymentMethod: req.Header.PaymentMethod,
+		CreatedAt:     parseTime(req.Header.CreatedAt),
+		BusinessName:  req.Header.BusinessName,
+		LegalName:     req.Header.LegalName,
+		TaxID:         req.Header.TaxID,
+		Phone:         req.Header.Phone,
+		Notes:         req.Header.Notes,
 	}
 	items := make([]escpos.Item, 0, len(req.Items))
 	for _, it := range req.Items {
@@ -218,6 +230,8 @@ func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
 		Copies:           req.Options.Copies,
 		FeedLinesBefore:  req.Options.FeedLinesBefore,
 		ItemDoubleHeight: info.ItemDoubleHeight,
+		Footer:           req.Footer,
+		QRCode:           req.QRCode,
 	}
 	return escpos.RenderTemplate(req.Template, codePage, chars, header, items, opts)
 }
@@ -230,6 +244,12 @@ func renderOfficePlainText(req PrintJob) ([]byte, error) {
 		Address:       req.Header.CustomerAddress,
 		DeliveryType:  req.Header.DeliveryType,
 		PaymentMethod: req.Header.PaymentMethod,
+		CreatedAt:     parseTime(req.Header.CreatedAt),
+		BusinessName:  req.Header.BusinessName,
+		LegalName:     req.Header.LegalName,
+		TaxID:         req.Header.TaxID,
+		Phone:         req.Header.Phone,
+		Notes:         req.Header.Notes,
 	}
 	items := make([]escpos.Item, 0, len(req.Items))
 	for _, it := range req.Items {
@@ -244,6 +264,11 @@ func renderOfficePlainText(req PrintJob) ([]byte, error) {
 	}
 	opts := escpos.Options{
 		Copies: req.Options.Copies,
+		Footer: req.Footer,
+		QRCode: req.QRCode,
+	}
+	if req.Template == "receipt" || req.Template == "cash" {
+		return escpos.RenderReceiptPlainText(header, items, opts)
 	}
 	return escpos.RenderKitchenPlainText(header, items, opts)
 }

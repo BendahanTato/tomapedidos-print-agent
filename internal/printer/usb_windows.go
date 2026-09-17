@@ -3,23 +3,66 @@
 package printer
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-// USBPrinter for Windows uses the OS spooler.
-//   - "usb" (thermal): raw binary via `print /d:`
-//   - "usb-office": plain text via PowerShell Out-Printer
+var (
+	winspool             = windows.NewLazySystemDLL("winspool.drv")
+	procOpenPrinter      = winspool.NewProc("OpenPrinterW")
+	procClosePrinter     = winspool.NewProc("ClosePrinter")
+	procWritePrinter     = winspool.NewProc("WritePrinter")
+	procGetPrinterW      = winspool.NewProc("GetPrinterW")
+	procStartDocPrinter  = winspool.NewProc("StartDocPrinterW")
+	procStartPagePrinter = winspool.NewProc("StartPagePrinter")
+	procEndPagePrinter   = winspool.NewProc("EndPagePrinter")
+	procEndDocPrinter    = winspool.NewProc("EndDocPrinter")
+)
+
+type docInfo1 struct {
+	docName    *uint16
+	outputFile *uint16
+	dataType   *uint16
+}
+
+type printerInfo2 struct {
+	pServerName         *uint16
+	pPrinterName        *uint16
+	pShareName          *uint16
+	pPortName           *uint16
+	pDriverName         *uint16
+	pComment            *uint16
+	pLocation           *uint16
+	pDevMode            uintptr
+	pSepFile            *uint16
+	pPrintProcessor     *uint16
+	pDatatype           *uint16
+	pParameters         *uint16
+	pSecurityDescriptor uintptr
+	Attributes          uint32
+	Priority            uint32
+	DefaultPriority     uint32
+	StartTime           uint32
+	UntilTime           uint32
+	Status              uint32
+	cJobs               uint32
+	AveragePPM          uint32
+}
+
+// USBPrinter for Windows uses the native winspool.drv API to write
+// raw bytes directly to the printer spooler. This works for both
+// thermal/ESC/POS and office/plain-text printers — the rendering
+// layer (RenderKitchen vs RenderKitchenPlainText) already produces
+// the correct format.
 type USBPrinter struct {
 	id          string
 	systemName  string
-	printerType string // "usb" or "usb-office"
 	timeout     time.Duration
+	printerType string
 }
 
 // NewUSB returns a USBPrinter configured for the given systemName.
@@ -31,73 +74,174 @@ func NewUSB(id, systemName string) *USBPrinter {
 	}
 }
 
-// SetType sets the rendering type ("usb" or "usb-office").
-func (p *USBPrinter) SetType(t string) { p.printerType = t }
-
 // ID returns the printer's logical identifier.
 func (p *USBPrinter) ID() string { return p.id }
 
 // SetTimeout adjusts the per-call deadline.
 func (p *USBPrinter) SetTimeout(d time.Duration) { p.timeout = d }
 
+// SetType sets the printer type to dynamically select RAW vs TEXT data types.
+func (p *USBPrinter) SetType(t string) { p.printerType = t }
+
 // Open checks that the printer exists in the Windows spooler.
 func (p *USBPrinter) Open(ctx context.Context) error {
 	return p.checkExists(ctx)
 }
 
-// Write sends the payload to the printer.
-//   - Thermal (usb): raw binary via `print /d:` — sends bytes directly
-//     to the spooler without interpretation.
-//   - Office (usb-office): plain text via PowerShell Out-Printer —
-//     the printer driver handles formatting.
+// Write sends the payload directly to the printer via winspool.drv.
+// The bytes are written as-is — no encoding or transformation.
 func (p *USBPrinter) Write(ctx context.Context, payload []byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
-	if p.printerType == "usb-office" {
-		return p.writeOffice(ctx, payload)
-	}
+	errc := make(chan error, 1)
+	go func() {
+		errc <- p.doWrite(payload)
+	}()
 
-	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("tpd-agent-%s-%d.bin", p.systemName, time.Now().UnixNano()))
-	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("printer %q write timeout: %w", p.systemName, ctx.Err())
+	case err := <-errc:
+		return err
 	}
-	defer os.Remove(tmp)
-
-	return p.writeRaw(ctx, tmp)
 }
 
-// writeRaw sends the file via the legacy `print /d:` command.
-// Best for thermal/ESC/POS printers that expect raw binary.
-func (p *USBPrinter) writeRaw(ctx context.Context, filePath string) error {
-	cmd := exec.CommandContext(ctx, "print", "/d:"+p.systemName, filePath)
-	out, err := cmd.CombinedOutput()
+func (p *USBPrinter) doWrite(payload []byte) error {
+	name, err := windows.UTF16PtrFromString(p.systemName)
 	if err != nil {
-		return fmt.Errorf("print /d:%s: %w%s", p.systemName, err, formatStderr(out))
+		return fmt.Errorf("invalid printer name %q: %w", p.systemName, err)
 	}
-	return nil
-}
 
-// writeOffice sends the payload directly via PowerShell here-string to Out-Printer.
-// Best for office/laser printers that expect plain text from the driver.
-func (p *USBPrinter) writeOffice(ctx context.Context, payload []byte) error {
-	ps := fmt.Sprintf(
-		"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; @'\n%s\n'@ | Out-Printer -Name '%s'",
-		string(payload), p.systemName,
+	var handle windows.Handle
+	ret, _, callErr := procOpenPrinter.Call(
+		uintptr(unsafe.Pointer(name)),
+		uintptr(unsafe.Pointer(&handle)),
+		0,
 	)
-	cmd := exec.CommandContext(ctx, "powershell", "-Command", ps)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("Out-Printer %s: %w%s", p.systemName, err, formatStderr(out))
+	if ret == 0 {
+		return fmt.Errorf("OpenPrinter(%s): %w", p.systemName, callErr)
 	}
+	defer procClosePrinter.Call(uintptr(handle))
+
+	docNamePtr, _ := windows.UTF16PtrFromString("Print Agent Job")
+	dataTypeStr := "RAW"
+	if p.printerType == "usb-office" {
+		dataTypeStr = "TEXT"
+	}
+	dataTypePtr, _ := windows.UTF16PtrFromString(dataTypeStr)
+
+	di := docInfo1{
+		docName:    docNamePtr,
+		outputFile: nil,
+		dataType:   dataTypePtr,
+	}
+
+	ret, _, callErr = procStartDocPrinter.Call(
+		uintptr(handle),
+		1,
+		uintptr(unsafe.Pointer(&di)),
+	)
+	if ret == 0 {
+		return fmt.Errorf("StartDocPrinter(%s): %w", p.systemName, callErr)
+	}
+	defer procEndDocPrinter.Call(uintptr(handle))
+
+	// For RAW data type (ESC/POS thermal printing), calling StartPagePrinter/EndPagePrinter
+	// causes page-based print processors to intercept or discard raw ESC/POS byte streams.
+	// Only call StartPagePrinter if data type is TEXT.
+	if dataTypeStr == "TEXT" {
+		ret, _, callErr = procStartPagePrinter.Call(uintptr(handle))
+		if ret == 0 {
+			return fmt.Errorf("StartPagePrinter(%s): %w", p.systemName, callErr)
+		}
+		defer procEndPagePrinter.Call(uintptr(handle))
+	}
+
+	totalWritten := 0
+	for totalWritten < len(payload) {
+		var written uint32
+		ret, _, callErr = procWritePrinter.Call(
+			uintptr(handle),
+			uintptr(unsafe.Pointer(&payload[totalWritten])),
+			uintptr(len(payload)-totalWritten),
+			uintptr(unsafe.Pointer(&written)),
+		)
+		if ret == 0 {
+			return fmt.Errorf("WritePrinter(%s): %w", p.systemName, callErr)
+		}
+		if written == 0 {
+			return fmt.Errorf("WritePrinter(%s): 0 bytes written", p.systemName)
+		}
+		totalWritten += int(written)
+	}
+
 	return nil
 }
 
-// Close is a no-op for USBPrinter.
+// Close is a no-op — handle is closed per-Write.
 func (p *USBPrinter) Close() error { return nil }
 
-// MakeAndModel returns empty on Windows (no CUPS equivalent).
-func (p *USBPrinter) MakeAndModel(ctx context.Context) string { return "" }
+// MakeAndModel queries the Windows spooler for the printer's driver name
+// using GetPrinterW (PRINTER_INFO_2). The driver name contains the make
+// and model (e.g., "EPSON L3250 Series", "Brother HL-L2360D series").
+func (p *USBPrinter) MakeAndModel(ctx context.Context) string {
+	name, err := windows.UTF16PtrFromString(p.systemName)
+	if err != nil {
+		return ""
+	}
+
+	var handle windows.Handle
+	ret, _, _ := procOpenPrinter.Call(
+		uintptr(unsafe.Pointer(name)),
+		uintptr(unsafe.Pointer(&handle)),
+		0,
+	)
+	if ret == 0 {
+		return ""
+	}
+	defer procClosePrinter.Call(uintptr(handle))
+
+	// First call: get required buffer size.
+	var needed uint32
+	procGetPrinterW.Call(
+		uintptr(handle),
+		2, // PRINTER_INFO_2 level
+		0,
+		0,
+		uintptr(unsafe.Pointer(&needed)),
+	)
+
+	if needed == 0 {
+		return ""
+	}
+
+	// Second call: get the actual data.
+	buf := make([]byte, needed)
+	ret, _, _ = procGetPrinterW.Call(
+		uintptr(handle),
+		2, // PRINTER_INFO_2 level
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(needed),
+		uintptr(unsafe.Pointer(&needed)),
+	)
+	if ret == 0 {
+		return ""
+	}
+
+	if len(buf) < int(unsafe.Sizeof(printerInfo2{})) {
+		return ""
+	}
+	pi2 := (*printerInfo2)(unsafe.Pointer(&buf[0]))
+	if pi2.pDriverName == nil {
+		return ""
+	}
+	return windows.UTF16PtrToString(pi2.pDriverName)
+}
 
 // Ping checks whether the printer is registered in the Windows spooler.
 func (p *USBPrinter) Ping(ctx context.Context) error {
@@ -108,16 +252,34 @@ func (p *USBPrinter) checkExists(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "powershell", "-Command",
-		"(Get-Printer -Name '"+p.systemName+"' -ErrorAction Stop).Name")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("Get-Printer %s: %w%s", p.systemName, err, formatStderr(out))
+	errc := make(chan error, 1)
+	go func() {
+		errc <- p.doCheckExists()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("printer %q ping timeout: %w", p.systemName, ctx.Err())
+	case err := <-errc:
+		return err
 	}
-	return nil
 }
 
-func formatStderr(out []byte) string {
-	if len(out) == 0 { return "" }
-	return ": " + string(bytes.TrimSpace(out))
+func (p *USBPrinter) doCheckExists() error {
+	name, err := windows.UTF16PtrFromString(p.systemName)
+	if err != nil {
+		return fmt.Errorf("invalid printer name: %w", err)
+	}
+
+	var handle windows.Handle
+	ret, _, callErr := procOpenPrinter.Call(
+		uintptr(unsafe.Pointer(name)),
+		uintptr(unsafe.Pointer(&handle)),
+		0,
+	)
+	if ret == 0 {
+		return fmt.Errorf("printer %q not found: %w", p.systemName, callErr)
+	}
+	procClosePrinter.Call(uintptr(handle))
+	return nil
 }

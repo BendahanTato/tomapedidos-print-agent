@@ -249,3 +249,19 @@ func millis(t time.Time) int64 {
 	}
 	return t.UnixMilli()
 }
+
+// deleteOldJobs removes jobs in a terminal state that are older than the specified duration,
+// then runs VACUUM to reclaim storage space.
+func (s *store) deleteOldJobs(ttl time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-ttl)
+	res, err := s.db.Exec(
+		`DELETE FROM jobs WHERE status IN ('printed', 'failed', 'cancelled') AND created_at_ms < ?`,
+		millis(cutoff),
+	)
+	if err != nil {
+		return 0, err
+	}
+	_, _ = s.db.Exec("VACUUM")
+	return res.RowsAffected()
+}
+

@@ -12,6 +12,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/transform"
 )
 
 // Standard ESC/POS command constants.
@@ -28,7 +31,8 @@ const (
 // Builder accumulates ESC/POS commands into a buffer. It is not goroutine
 // safe; create one per render call.
 type Builder struct {
-	buf bytes.Buffer
+	buf     bytes.Buffer
+	encoder transform.Transformer
 }
 
 // NewBuilder returns a fresh Builder.
@@ -51,6 +55,7 @@ func (b *Builder) Len() int {
 // Reset clears the buffer. Useful for re-using a Builder across renders.
 func (b *Builder) Reset() {
 	b.buf.Reset()
+	b.encoder = nil
 }
 
 // Initialize sends ESC @ which resets the printer to its default state.
@@ -74,16 +79,26 @@ func (b *Builder) FormFeed() *Builder {
 	return b
 }
 
-// Text appends raw bytes to the buffer without any encoding conversion.
-// Callers are expected to feed bytes already in the target code page.
+// Text appends raw bytes to the buffer after translating the UTF-8 string to the selected Code Page.
 func (b *Builder) Text(s string) *Builder {
+	if b.encoder != nil {
+		encoded, _, err := transform.Bytes(b.encoder, []byte(s))
+		if err == nil {
+			b.buf.Write(encoded)
+			return b
+		}
+		// If transform fails, write whatever it managed to encode (with replacements).
+		// Never fallback to raw UTF-8 as it will corrupt ESC/POS output.
+		b.buf.Write(encoded)
+		return b
+	}
 	b.buf.WriteString(s)
 	return b
 }
 
 // TextLine appends s followed by a LF.
 func (b *Builder) TextLine(s string) *Builder {
-	b.buf.WriteString(s)
+	b.Text(s)
 	b.buf.WriteByte(lf)
 	return b
 }
@@ -164,6 +179,12 @@ func (b *Builder) SelectCodePage(name string) error {
 	b.buf.WriteByte(esc)
 	b.buf.WriteByte('t')
 	b.buf.WriteByte(byte(n))
+
+	if enc, ok := CodePageEncoders[name]; ok {
+		b.encoder = encoding.ReplaceUnsupported(enc.NewEncoder())
+	} else {
+		b.encoder = nil
+	}
 	return nil
 }
 
@@ -226,6 +247,81 @@ func (b *Builder) KickDrawer(pin byte, onMs, offMs int) *Builder {
 // Feed emits n LF characters. Convenience alias for LineFeed.
 func (b *Builder) Feed(n int) *Builder {
 	return b.LineFeed(n)
+}
+
+// QRCode writes an ESC/POS 2D QR Code symbol sequence using GS ( k.
+// moduleSize is in dots (1 to 16, typically 4 to 8, defaults to 5).
+// ecLevel is the error correction level ('L', 'M', 'Q', 'H', defaults to 'M').
+func (b *Builder) QRCode(content string, moduleSize int, ecLevel byte) *Builder {
+	if content == "" {
+		return b
+	}
+	if moduleSize < 1 || moduleSize > 16 {
+		moduleSize = 5
+	}
+	var ecc byte
+	switch ecLevel {
+	case 'L', 'l':
+		ecc = 0x30
+	case 'Q', 'q':
+		ecc = 0x32
+	case 'H', 'h':
+		ecc = 0x33
+	default:
+		ecc = 0x31 // 'M'
+	}
+
+	data := []byte(content)
+	dataLen := len(data) + 3
+	pL := byte(dataLen & 0xFF)
+	pH := byte((dataLen >> 8) & 0xFF)
+
+	// 1. Select Model: Model 2 (Function 165)
+	// GS ( k 0x04 0x00 0x31 0x41 0x32 0x00
+	b.buf.Write([]byte{gs, '(', 'k', 0x04, 0x00, 0x31, 0x41, 0x32, 0x00})
+
+	// 2. Set Module Size (Function 167)
+	// GS ( k 0x03 0x00 0x31 0x43 n
+	b.buf.Write([]byte{gs, '(', 'k', 0x03, 0x00, 0x31, 0x43, byte(moduleSize)})
+
+	// 3. Set Error Correction Level (Function 169)
+	// GS ( k 0x03 0x00 0x31 0x45 n
+	b.buf.Write([]byte{gs, '(', 'k', 0x03, 0x00, 0x31, 0x45, ecc})
+
+	// 4. Store Data in Symbol Storage (Function 180)
+	// GS ( k pL pH 0x31 0x50 0x30 d1...dk
+	b.buf.Write([]byte{gs, '(', 'k', pL, pH, 0x31, 0x50, 0x30})
+	b.buf.Write(data)
+
+	// 5. Print Symbol (Function 181)
+	// GS ( k 0x03 0x00 0x31 0x51 0x30
+	b.buf.Write([]byte{gs, '(', 'k', 0x03, 0x00, 0x31, 0x51, 0x30})
+
+	return b
+}
+
+// RasterImage emits a monochrome bit image using GS v 0.
+// width is the pixel width and height is the pixel height.
+// data contains (widthBytes * height) bytes packed 8 dots per byte (MSB first).
+func (b *Builder) RasterImage(width, height int, data []byte) *Builder {
+	if width <= 0 || height <= 0 || len(data) == 0 {
+		return b
+	}
+	widthBytes := (width + 7) / 8
+	expectedLen := widthBytes * height
+	if len(data) < expectedLen {
+		return b
+	}
+
+	xL := byte(widthBytes & 0xFF)
+	xH := byte((widthBytes >> 8) & 0xFF)
+	yL := byte(height & 0xFF)
+	yH := byte((height >> 8) & 0xFF)
+
+	// GS v 0 m xL xH yL yH
+	b.buf.Write([]byte{gs, 'v', '0', 0x00, xL, xH, yL, yH})
+	b.buf.Write(data[:expectedLen])
+	return b
 }
 
 // ErrEmptyPayload is returned by RenderKitchen when the builder would

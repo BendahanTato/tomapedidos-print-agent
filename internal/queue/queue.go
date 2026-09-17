@@ -47,6 +47,7 @@ type Job struct {
 	CreatedAt   time.Time `json:"created_at"`
 	StartedAt   time.Time `json:"started_at,omitempty"`
 	FinishedAt  time.Time `json:"finished_at,omitempty"`
+	NextRetryAt time.Time `json:"next_retry_at,omitempty"`
 }
 
 // ErrDuplicate is returned by Submit when a job with the same ID was
@@ -67,6 +68,7 @@ type Queue struct {
 	log      *slog.Logger
 
 	notifyCh chan struct{}
+	closeCh  chan struct{}
 }
 
 // New returns a Queue configured with maxRetries and dedupTTL.
@@ -87,6 +89,7 @@ func New(maxRetries int, dedupTTL time.Duration, persistPath string, log *slog.L
 		bus:      bus,
 		log:      log,
 		notifyCh: make(chan struct{}, 1),
+		closeCh:  make(chan struct{}),
 	}
 
 	if persistPath != "" {
@@ -111,6 +114,9 @@ func New(maxRetries int, dedupTTL time.Duration, persistPath string, log *slog.L
 		}
 		// Wake the worker pool so reloaded jobs are picked up.
 		q.Wake()
+
+		// Spawn the background vacuum loop.
+		go q.vacuumLoop()
 	}
 	return q, nil
 }
@@ -152,6 +158,12 @@ func resolveStoragePath(raw string) string {
 func (q *Queue) Close() error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	select {
+	case <-q.closeCh:
+		// already closed
+	default:
+		close(q.closeCh)
+	}
 	if q.st != nil {
 		return q.st.close()
 	}
@@ -238,11 +250,10 @@ func (q *Queue) Pop(printerID string) *Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	qpl := q.queues[printerID]
-	for len(qpl) > 0 {
-		j := qpl[0]
-		q.queues[printerID] = qpl[1:]
-		qpl = q.queues[printerID]
-		if j.Status == StatusQueued {
+	for i, j := range qpl {
+		if j.Status == StatusQueued && (j.NextRetryAt.IsZero() || time.Now().After(j.NextRetryAt)) {
+			// Remove from queue.
+			q.queues[printerID] = append(qpl[:i], qpl[i+1:]...)
 			j.Status = StatusPrinting
 			j.Attempts++
 			j.StartedAt = time.Now()
@@ -413,3 +424,40 @@ func (q *Queue) emit(typ string, j *Job, errMsg string) {
 // StoredJob is a thin projection returned by store queries when the
 // requesting code wants to avoid importing database/sql.
 type StoredJob = Job
+
+func (q *Queue) vacuumLoop() {
+	// Run vacuum every 12 hours.
+	ticker := time.NewTicker(12 * time.Hour)
+	defer ticker.Stop()
+
+	// Run once immediately on start.
+	q.vacuum()
+
+	for {
+		select {
+		case <-q.closeCh:
+			return
+		case <-ticker.C:
+			q.vacuum()
+		}
+	}
+}
+
+func (q *Queue) vacuum() {
+	q.mu.Lock()
+	st := q.st
+	q.mu.Unlock()
+	if st == nil {
+		return
+	}
+
+	// Purge jobs older than 7 days.
+	deleted, err := st.deleteOldJobs(7 * 24 * time.Hour)
+	if err != nil {
+		if q.log != nil {
+			q.log.Error("vacuum database failed", "error", err)
+		}
+	} else if deleted > 0 && q.log != nil {
+		q.log.Info("vacuum database completed", "deleted_jobs", deleted)
+	}
+}

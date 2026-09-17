@@ -116,3 +116,54 @@ func TestPersistDedupAcrossRestarts(t *testing.T) {
 	}
 	_ = q2.Close()
 }
+
+func TestVacuumOldJobs(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "vacuum.db")
+
+	q, err := New(0, time.Hour, dbPath, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer q.Close()
+
+	// 1. Submit and mark a job as printed.
+	_, err = q.Submit("printer-a", "vac-1", []byte("payload"), "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	popped := q.Pop("printer-a")
+	q.MarkPrinted(popped)
+
+	// 2. Submit a job that stays queued (should NOT be vacuumed).
+	_, err = q.Submit("printer-a", "vac-2", []byte("payload"), "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	// Forzar la fecha de creación a hace 8 días en la BD para vac-1.
+	_, err = q.st.db.Exec(`UPDATE jobs SET created_at_ms = ? WHERE id = 'vac-1'`, time.Now().Add(-8*24*time.Hour).UnixMilli())
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	// Ejecutar deleteOldJobs con un TTL de 7 días.
+	deleted, err := q.st.deleteOldJobs(7 * 24 * time.Hour)
+	if err != nil {
+		t.Fatalf("deleteOldJobs: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1", deleted)
+	}
+
+	// Verificar que vac-1 se borró, pero vac-2 se mantuvo.
+	_, found1 := q.st.loadByID("vac-1")
+	if found1 {
+		t.Errorf("vac-1 should have been deleted")
+	}
+	_, found2 := q.st.loadByID("vac-2")
+	if !found2 {
+		t.Errorf("vac-2 should not have been deleted")
+	}
+}
+
