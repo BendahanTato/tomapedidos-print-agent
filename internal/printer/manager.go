@@ -19,16 +19,17 @@ import (
 // required fields are missing (Validate should have caught this already).
 func NewFromConfig(ctx context.Context, p config.Printer) (Printer, Info, error) {
 	info := Info{
-		ID:           p.ID,
-		Name:         p.Name,
-		Type:         p.Type,
-		Host:         p.Host,
-		Port:         p.Port,
-		SystemName:   p.SystemName,
-		FilePath:     p.FilePath,
-		CodePage:     p.CodePage,
-		CharsPerLine: p.CharsPerLine,
-		Cut:          p.Cut,
+		ID:               p.ID,
+		Name:             p.Name,
+		Type:             p.Type,
+		Host:             p.Host,
+		Port:             p.Port,
+		SystemName:       p.SystemName,
+		FilePath:         p.FilePath,
+		CodePage:         p.CodePage,
+		CharsPerLine:     p.CharsPerLine,
+		Cut:              p.Cut,
+		ItemDoubleHeight: p.ItemDoubleHeight,
 	}
 	switch p.Type {
 	case "network":

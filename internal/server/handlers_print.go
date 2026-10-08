@@ -225,18 +225,15 @@ func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
 	}
 	cut := firstNonEmpty(req.Options.Cut, info.Cut, "partial")
 	opts := escpos.Options{
-		Cut:             cut,
-		OpenCashDrawer:  req.Options.OpenCashDrawer,
-		Copies:          req.Options.Copies,
-		FeedLinesBefore: req.Options.FeedLinesBefore,
-		Footer:          req.Footer,
-		QRCode:          req.QRCode,
+		Cut:              cut,
+		OpenCashDrawer:   req.Options.OpenCashDrawer,
+		Copies:           req.Options.Copies,
+		FeedLinesBefore:  req.Options.FeedLinesBefore,
+		ItemDoubleHeight: info.ItemDoubleHeight,
+		Footer:           req.Footer,
+		QRCode:           req.QRCode,
 	}
-
-	if req.Template == "receipt" || req.Template == "cash" {
-		return escpos.RenderReceipt(codePage, chars, header, items, opts)
-	}
-	return escpos.RenderKitchen(codePage, chars, header, items, opts)
+	return escpos.RenderTemplate(req.Template, codePage, chars, header, items, opts)
 }
 
 func renderOfficePlainText(req PrintJob) ([]byte, error) {

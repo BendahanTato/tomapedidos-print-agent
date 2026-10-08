@@ -63,15 +63,15 @@ func TestKickDrawerBounds(t *testing.T) {
 }
 
 func TestKitchenTemplateContainsOrder(t *testing.T) {
-	got, err := RenderKitchen("cp850", 32, Header{
-		OrderNumber:  123,
-		CustomerName: "Juan",
-		DeliveryType: "take_away",
+	got, err := RenderTemplate("kitchen", "cp850", 32, Header{
+		OrderNumber:   123,
+		CustomerName:  "Juan",
+		DeliveryType:  "take_away",
 	}, []Item{
 		{Qty: 2, Name: "Pizza Muzza", Modifiers: []string{"Extra queso"}},
 	}, Options{Cut: "partial"})
 	if err != nil {
-		t.Fatalf("RenderKitchen: %v", err)
+		t.Fatalf("RenderTemplate: %v", err)
 	}
 	if !bytes.Contains(got, []byte("PEDIDO #123")) {
 		t.Errorf("expected ticket to contain PEDIDO #123")
@@ -89,18 +89,18 @@ func TestKitchenTemplateContainsOrder(t *testing.T) {
 }
 
 func TestKitchenTemplateEmptyItems(t *testing.T) {
-	_, err := RenderKitchen("cp850", 32, Header{OrderNumber: 1}, nil, Options{})
+	_, err := RenderTemplate("kitchen", "cp850", 32, Header{OrderNumber: 1}, nil, Options{})
 	if err != ErrEmptyPayload {
 		t.Errorf("expected ErrEmptyPayload, got %v", err)
 	}
 }
 
 func TestKitchenTemplateCopies(t *testing.T) {
-	once, err := RenderKitchen("cp850", 32, Header{OrderNumber: 1}, []Item{{Qty: 1, Name: "X"}}, Options{Cut: "partial"})
+	once, err := RenderTemplate("kitchen", "cp850", 32, Header{OrderNumber: 1}, []Item{{Qty: 1, Name: "X"}}, Options{Cut: "partial"})
 	if err != nil {
 		t.Fatalf("once: %v", err)
 	}
-	thrice, err := RenderKitchen("cp850", 32, Header{OrderNumber: 1}, []Item{{Qty: 1, Name: "X"}}, Options{Cut: "partial", Copies: 3})
+	thrice, err := RenderTemplate("kitchen", "cp850", 32, Header{OrderNumber: 1}, []Item{{Qty: 1, Name: "X"}}, Options{Cut: "partial", Copies: 3})
 	if err != nil {
 		t.Fatalf("thrice: %v", err)
 	}
