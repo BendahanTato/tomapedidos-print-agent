@@ -2,6 +2,7 @@
 /print-agent
 /print-agent-*
 /dist/
+cmd/print-agent/resource_windows_*.syso
 
 # Local configs (each operator copies printers.example.json)
 configs/printers.json

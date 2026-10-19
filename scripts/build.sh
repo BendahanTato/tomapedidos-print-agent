@@ -37,6 +37,28 @@ build_one() {
     out="${out}.exe"
     # Preservar símbolos en Windows para evitar falsos positivos de antivirus (Avast IDP.Generic / Defender)
     ldflags="${BASE_LDFLAGS}"
+    local resource="cmd/print-agent/resource_windows_${GOARCH}.syso"
+    rm -f "${resource}"
+    if command -v goversioninfo >/dev/null 2>&1; then
+      local major=0 minor=0 patch=0 build=0 file_version="0.0.0.0"
+      if [[ "${VERSION}" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)(\.([0-9]+))?$ ]]; then
+        major="${BASH_REMATCH[1]}"
+        minor="${BASH_REMATCH[2]}"
+        patch="${BASH_REMATCH[3]}"
+        build="${BASH_REMATCH[5]:-0}"
+        file_version="${major}.${minor}.${patch}.${build}"
+      fi
+      echo "  -> generating Windows VERSIONINFO for ${GOARCH}"
+      GOARCH="${GOARCH}" goversioninfo \
+        -o "${resource}" \
+        -manifest cmd/print-agent/manifest.xml \
+        -ver-major "${major}" -ver-minor "${minor}" -ver-patch "${patch}" -ver-build "${build}" \
+        -product-ver-major "${major}" -product-ver-minor "${minor}" -product-ver-patch "${patch}" -product-ver-build "${build}" \
+        -file-version "${file_version}" -product-version "${file_version}" \
+        cmd/print-agent/versioninfo.json
+    else
+      echo "  !! goversioninfo not found; building Windows binary without VERSIONINFO/manifest resources" >&2
+    fi
   fi
   echo "  -> ${out}"
   CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" \

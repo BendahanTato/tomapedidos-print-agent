@@ -9,7 +9,6 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -20,12 +19,26 @@ jobs:
           - { goos: linux,   goarch: arm64 }
           - { goos: windows, goarch: amd64 }
           - { goos: windows, goarch: arm64 }
+    runs-on: ${{ matrix.target.goos == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
+    env:
+      SIGNING_ENABLED: ${{ vars.SIGNING_ENABLED }}
+      SIGNING_SECRETS_PRESENT: ${{ secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' }}
+      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+      AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+      - name: install goversioninfo
+        if: matrix.target.goos == 'windows'
+        shell: bash
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: build
+        shell: bash
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
           SHORT_SHA="${GITHUB_SHA:0:8}"
@@ -38,14 +51,53 @@ jobs:
           if [ "${OS}" != "windows" ]; then
             LDFLAGS="${LDFLAGS} -s -w"
           fi
+          if [ "${OS}" = "windows" ]; then
+            RESOURCE="cmd/print-agent/resource_windows_${ARCH}.syso"
+            rm -f "${RESOURCE}"
+            MAJOR=0
+            MINOR=0
+            PATCH=0
+            BUILD=0
+            FILE_VERSION="0.0.0.0"
+            if [[ "${VERSION}" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)(\.([0-9]+))?$ ]]; then
+              MAJOR="${BASH_REMATCH[1]}"
+              MINOR="${BASH_REMATCH[2]}"
+              PATCH="${BASH_REMATCH[3]}"
+              BUILD="${BASH_REMATCH[5]:-0}"
+              FILE_VERSION="${MAJOR}.${MINOR}.${PATCH}.${BUILD}"
+            fi
+            GOARCH="${ARCH}" goversioninfo \
+              -o "${RESOURCE}" \
+              -manifest cmd/print-agent/manifest.xml \
+              -ver-major "${MAJOR}" -ver-minor "${MINOR}" -ver-patch "${PATCH}" -ver-build "${BUILD}" \
+              -product-ver-major "${MAJOR}" -product-ver-minor "${MINOR}" -product-ver-patch "${PATCH}" -product-ver-build "${BUILD}" \
+              -file-version "${FILE_VERSION}" -product-version "${FILE_VERSION}" \
+              cmd/print-agent/versioninfo.json
+          fi
           NAME="print-agent-${OS}-${ARCH}${EXT}"
           CGO_ENABLED=0 GOOS="${OS}" GOARCH="${ARCH}" \
             go build -trimpath -ldflags "${LDFLAGS}" -o "${NAME}" ./cmd/print-agent
           echo "NAME=${NAME}" >> "$GITHUB_ENV"
+      - name: sign Windows executable with Azure Trusted Signing
+        if: ${{ matrix.target.goos == 'windows' && env.SIGNING_ENABLED == 'true' && env.SIGNING_SECRETS_PRESENT == 'true' && env.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME != '' }}
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       - uses: actions/upload-artifact@v4
         with:
           name: "print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}"
-          path: "print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}*"
+          path: "print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}${{ matrix.target.goos == 'windows' && '.exe' || '' }}"
 
   release:
     needs: build
