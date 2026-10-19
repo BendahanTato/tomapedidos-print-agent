@@ -1,7 +1,7 @@
 package queue
 
 import (
-	"os"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -99,22 +99,40 @@ func TestPersistDedupAcrossRestarts(t *testing.T) {
 	dbPath := filepath.Join(dir, "dedup.db")
 
 	// First life: submit and finish a job.
-	q1, _ := New(1, time.Hour, dbPath, nil, nil)
-	q1.Submit("p1", "dedup-99", []byte("a"), "")
+	q1, err := New(1, time.Hour, dbPath, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := q1.Submit("p1", "dedup-99", []byte("a"), ""); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
 	popped := q1.Pop("p1")
+	if popped == nil {
+		t.Fatal("Pop returned nil")
+	}
 	q1.MarkPrinted(popped)
-	_ = q1.Close()
+	if err := q1.Close(); err != nil {
+		t.Fatalf("Close #1: %v", err)
+	}
 
 	// Second life: same job_id should still be dedup'd.
-	q2, _ := New(1, time.Hour, dbPath, nil, nil)
-	_, err := q2.Submit("p1", "dedup-99", []byte("b"), "")
-	if !os.IsTimeout(nil) && err != ErrDuplicate {
-		// Actually check properly.
-		if err != ErrDuplicate {
-			t.Errorf("expected ErrDuplicate, got %v", err)
-		}
+	q2, err := New(1, time.Hour, dbPath, nil, nil)
+	if err != nil {
+		t.Fatalf("New #2: %v", err)
 	}
-	_ = q2.Close()
+	job, err := q2.Submit("p1", "dedup-99", []byte("b"), "")
+	if !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("expected ErrDuplicate, got %v", err)
+	}
+	if job == nil {
+		t.Fatal("duplicate Submit returned nil job")
+	}
+	if job.ID != "dedup-99" || job.PrinterID != "p1" || job.Status != StatusPrinted {
+		t.Errorf("duplicate job = %+v, want stored printed job dedup-99 on p1", job)
+	}
+	if err := q2.Close(); err != nil {
+		t.Fatalf("Close #2: %v", err)
+	}
 }
 
 func TestVacuumOldJobs(t *testing.T) {
@@ -166,4 +184,3 @@ func TestVacuumOldJobs(t *testing.T) {
 		t.Errorf("vac-2 should not have been deleted")
 	}
 }
-

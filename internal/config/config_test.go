@@ -69,6 +69,21 @@ func TestValidateUnknownType(t *testing.T) {
 	}
 }
 
+func TestPrinterTimeoutDefaultAndValidation(t *testing.T) {
+	cfg := Default()
+	if got, want := cfg.Printers[0].TimeoutMs, 5000; got != want {
+		t.Errorf("default printer timeout_ms = %d, want %d", got, want)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate default config: %v", err)
+	}
+
+	cfg.Printers[0].TimeoutMs = -1
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate accepted a negative printer timeout_ms")
+	}
+}
+
 func TestReloadReadsFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "p.json")

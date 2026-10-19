@@ -2,7 +2,11 @@ package escpos
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 func TestBuilderInitialize(t *testing.T) {
@@ -64,9 +68,9 @@ func TestKickDrawerBounds(t *testing.T) {
 
 func TestKitchenTemplateContainsOrder(t *testing.T) {
 	got, err := RenderTemplate("kitchen", "cp850", 32, Header{
-		OrderNumber:   123,
-		CustomerName:  "Juan",
-		DeliveryType:  "take_away",
+		OrderNumber:  123,
+		CustomerName: "Juan",
+		DeliveryType: "take_away",
 	}, []Item{
 		{Qty: 2, Name: "Pizza Muzza", Modifiers: []string{"Extra queso"}},
 	}, Options{Cut: "partial"})
@@ -106,6 +110,42 @@ func TestKitchenTemplateCopies(t *testing.T) {
 	}
 	if len(thrice) != 3*len(once) {
 		t.Errorf("copies: got len %d, want %d", len(thrice), 3*len(once))
+	}
+}
+
+func TestTemplateSearchPrefersExecutableDirectory(t *testing.T) {
+	executableDir := t.TempDir()
+	cwd := t.TempDir()
+	for dir, content := range map[string]string{
+		executableDir: "EXECUTABLE TEMPLATE",
+		cwd:           "WORKING DIRECTORY TEMPLATE",
+	} {
+		templateDir := filepath.Join(dir, "templates")
+		if err := os.MkdirAll(templateDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(templateDir, "custom.tmpl"), []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	wantPath := filepath.Join(executableDir, "templates", "custom.tmpl")
+	if got := resolveTemplatePathIn("custom", executableDir, cwd); got != wantPath {
+		t.Fatalf("resolveTemplatePathIn = %q, want executable template %q", got, wantPath)
+	}
+	body, gotPath := loadTemplateBody("custom", executableDir, cwd)
+	if gotPath != wantPath || string(body) != "EXECUTABLE TEMPLATE" {
+		t.Fatalf("loaded template = (%q, %q), want executable template at %q", body, gotPath, wantPath)
+	}
+}
+
+func TestTemplateFallsBackToHardcodedDefault(t *testing.T) {
+	body, path := loadTemplateBody("missing", t.TempDir())
+	if path != "<default>" {
+		t.Errorf("template path = %q, want <default>", path)
+	}
+	if string(body) != defaultKitchenTemplate {
+		t.Errorf("template body did not fall back to hardcoded default")
 	}
 }
 
@@ -278,5 +318,59 @@ func TestRenderReceiptPlainText(t *testing.T) {
 	}
 	if !bytes.Contains(got, []byte("[QR: https://ejemplo.com]")) {
 		t.Errorf("plain text missing QR tag")
+	}
+}
+
+func TestPlainTextWindows1252Encoding(t *testing.T) {
+	phrase := "Dirección: José Ñandú #45 • ¿Delivery?"
+	header := Header{Address: phrase}
+	items := []Item{{Qty: 1, Name: "Pedido"}}
+
+	renderers := []struct {
+		name   string
+		render func(Header, []Item, Options) ([]byte, error)
+	}{
+		{"kitchen", RenderKitchenPlainText},
+		{"receipt", RenderReceiptPlainText},
+	}
+	for _, tc := range renderers {
+		t.Run(tc.name, func(t *testing.T) {
+			ansi, err := tc.render(header, items, Options{EncodeANSI: true})
+			if err != nil {
+				t.Fatalf("render with ANSI encoding: %v", err)
+			}
+			wantBytes := []byte("Direcci\xf3n: Jos\xe9 \xd1and\xfa #45 \x95 \xbfDelivery?")
+			if !bytes.Contains(ansi, wantBytes) {
+				t.Fatalf("Windows-1252 output missing encoded address: %v", ansi)
+			}
+			decoded, err := charmap.Windows1252.NewDecoder().Bytes(ansi)
+			if err != nil {
+				t.Fatalf("decode Windows-1252 output: %v", err)
+			}
+			if !bytes.Contains(decoded, []byte(phrase)) {
+				t.Errorf("decoded output does not contain original address: %q", decoded)
+			}
+
+			utf8Output, err := tc.render(header, items, Options{EncodeANSI: false})
+			if err != nil {
+				t.Fatalf("render without ANSI encoding: %v", err)
+			}
+			if !bytes.Contains(utf8Output, []byte(phrase)) {
+				t.Errorf("UTF-8 output missing original address: %q", utf8Output)
+			}
+			if !bytes.Contains(utf8Output, []byte("\xc3\xb3")) {
+				t.Errorf("UTF-8 output was unexpectedly transcoded: %v", utf8Output)
+			}
+		})
+	}
+}
+
+func TestPlainTextWindows1252ReplacesUnsupportedCharacters(t *testing.T) {
+	got, err := RenderKitchenPlainText(Header{Address: "Delivery 🚀"}, []Item{{Qty: 1, Name: "Pedido"}}, Options{EncodeANSI: true})
+	if err != nil {
+		t.Fatalf("RenderKitchenPlainText: %v", err)
+	}
+	if !bytes.Contains(got, []byte("Delivery ?")) {
+		t.Errorf("unsupported character was not replaced: %v", got)
 	}
 }

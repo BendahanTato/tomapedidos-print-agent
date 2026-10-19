@@ -210,8 +210,12 @@ func (q *Queue) Submit(printerID string, jobID string, payload []byte, preview s
 			if prev, ok := q.byID[jobID]; ok {
 				return prev, ErrDuplicate
 			}
-			// Just reject; the client can re-submit with a new id.
-			return nil, ErrDuplicate
+			if prev, ok := q.st.loadByID(jobID); ok {
+				return prev, ErrDuplicate
+			}
+			// The dedup row may outlive its corresponding job row. Return a
+			// minimal job so callers can still acknowledge the duplicate.
+			return &Job{ID: jobID, PrinterID: printerID, Status: StatusPrinted}, ErrDuplicate
 		}
 		_ = q.st.insertDedup(jobID, time.Now())
 	}

@@ -40,6 +40,7 @@ type Printer struct {
 	Type             string `json:"type"`
 	Host             string `json:"host,omitempty"`
 	Port             int    `json:"port,omitempty"`
+	TimeoutMs        int    `json:"timeout_ms,omitempty"`
 	SystemName       string `json:"system_name,omitempty"`
 	FilePath         string `json:"file_path,omitempty"`
 	CodePage         string `json:"code_page"`
@@ -90,6 +91,7 @@ func Default() Config {
 				Type:             "network",
 				Host:             "192.168.1.30",
 				Port:             9100,
+				TimeoutMs:        5000,
 				CodePage:         "cp850",
 				CharsPerLine:     42,
 				Cut:              "partial",
@@ -271,6 +273,9 @@ func (c *Config) Validate() error {
 		}
 		if p.Cut != "" && p.Cut != "partial" && p.Cut != "full" && p.Cut != "none" {
 			return fmt.Errorf("printers[%d] (%s): cut must be partial, full or none", i, p.ID)
+		}
+		if p.TimeoutMs < 0 {
+			return fmt.Errorf("printers[%d] (%s): timeout_ms must be >= 0", i, p.ID)
 		}
 	}
 	if c.Queue.MaxRetries < 0 {

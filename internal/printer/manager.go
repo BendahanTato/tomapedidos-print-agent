@@ -34,6 +34,11 @@ func NewFromConfig(ctx context.Context, p config.Printer) (Printer, Info, error)
 	switch p.Type {
 	case "network":
 		np := NewNetwork(p.ID, p.Host, p.Port)
+		// Per-printer override; TimeoutMs <= 0 keeps the default timeout
+		// so existing configurations keep their previous behaviour.
+		if p.TimeoutMs > 0 {
+			np.SetTimeout(time.Duration(p.TimeoutMs) * time.Millisecond)
+		}
 		if err := np.Open(ctx); err != nil {
 			info.Status = StatusOffline
 			info.LastError = err.Error()

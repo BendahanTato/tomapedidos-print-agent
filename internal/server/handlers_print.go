@@ -14,14 +14,14 @@ import (
 // POST /print/batch (multiple jobs). The same struct is used in both
 // endpoints; /print/batch wraps a slice.
 type PrintJob struct {
-	JobID      string      `json:"job_id,omitempty"`
-	PrinterID  string      `json:"printer_id"`
-	Template   string      `json:"template,omitempty"` // "kitchen" | "cash" | "receipt"
-	Header     PrintHeader `json:"header"`
-	Items      []PrintItem `json:"items"`
-	Footer     string      `json:"footer,omitempty"`
-	QRCode     string      `json:"qr_code,omitempty"`
-	Options    PrintOpts   `json:"options,omitempty"`
+	JobID     string      `json:"job_id,omitempty"`
+	PrinterID string      `json:"printer_id"`
+	Template  string      `json:"template,omitempty"` // "kitchen" | "cash" | "receipt"
+	Header    PrintHeader `json:"header"`
+	Items     []PrintItem `json:"items"`
+	Footer    string      `json:"footer,omitempty"`
+	QRCode    string      `json:"qr_code,omitempty"`
+	Options   PrintOpts   `json:"options,omitempty"`
 }
 
 // PrintHeader mirrors escpos.Header. Kept separate so the JSON contract
@@ -56,7 +56,7 @@ type PrintItem struct {
 
 // PrintOpts controls trailing behavior (cut, kick, copies, feed).
 type PrintOpts struct {
-	Cut             string `json:"cut,omitempty"`              // partial | full | none
+	Cut             string `json:"cut,omitempty"` // partial | full | none
 	OpenCashDrawer  bool   `json:"open_cash_drawer,omitempty"`
 	Copies          int    `json:"copies,omitempty"`
 	FeedLinesBefore int    `json:"feed_lines_before,omitempty"`
@@ -97,6 +97,14 @@ func printHandler(d Deps) http.HandlerFunc {
 		}
 		job, err := submitJob(d, req)
 		if err != nil {
+			if errors.Is(err, queue.ErrDuplicate) {
+				writeJSON(w, http.StatusAccepted, SingleResponse{
+					JobID:     req.JobID,
+					PrinterID: req.PrinterID,
+					Status:    "duplicate",
+				})
+				return
+			}
 			if errors.Is(err, errPrinterNotFound{}) || IsNotFound(err) {
 				writeError(w, http.StatusNotFound, "printer_not_found", err.Error())
 				return
@@ -131,6 +139,14 @@ func printBatchHandler(d Deps) http.HandlerFunc {
 		for _, j := range req.Jobs {
 			job, err := submitJob(d, j)
 			if err != nil {
+				if errors.Is(err, queue.ErrDuplicate) {
+					resp.Jobs = append(resp.Jobs, JobRef{
+						JobID:     j.JobID,
+						PrinterID: j.PrinterID,
+						Status:    "duplicate",
+					})
+					continue
+				}
 				if errors.Is(err, errPrinterNotFound{}) || IsNotFound(err) {
 					writeError(w, http.StatusNotFound, "printer_not_found", err.Error())
 					return
@@ -177,6 +193,9 @@ func submitJob(d Deps, req PrintJob) (*queue.Job, error) {
 	preview := renderPreview(req)
 	job, err := d.Queue.Submit(req.PrinterID, req.JobID, payload, preview)
 	if err != nil {
+		if job == nil {
+			return nil, queue.ErrDuplicate
+		}
 		// ErrDuplicate is fine; return the existing job so the caller
 		// knows the print was already accepted.
 		return job, nil
@@ -188,7 +207,7 @@ func submitJob(d Deps, req PrintJob) (*queue.Job, error) {
 // appropriate template (kitchen vs receipt/cash).
 func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
 	if info.Type == "usb-office" || info.Type == "usb-gdi" {
-		return renderOfficePlainText(req)
+		return renderOfficePlainText(req, info.Type)
 	}
 	codePage := info.CodePage
 	if codePage == "" {
@@ -236,7 +255,7 @@ func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
 	return escpos.RenderTemplate(req.Template, codePage, chars, header, items, opts)
 }
 
-func renderOfficePlainText(req PrintJob) ([]byte, error) {
+func renderOfficePlainText(req PrintJob, printerType string) ([]byte, error) {
 	header := escpos.Header{
 		OrderNumber:   req.Header.OrderNumber,
 		CustomerName:  req.Header.CustomerName,
@@ -263,9 +282,10 @@ func renderOfficePlainText(req PrintJob) ([]byte, error) {
 		})
 	}
 	opts := escpos.Options{
-		Copies: req.Options.Copies,
-		Footer: req.Footer,
-		QRCode: req.QRCode,
+		Copies:     req.Options.Copies,
+		EncodeANSI: printerType == "usb-office",
+		Footer:     req.Footer,
+		QRCode:     req.QRCode,
 	}
 	if req.Template == "receipt" || req.Template == "cash" {
 		return escpos.RenderReceiptPlainText(header, items, opts)

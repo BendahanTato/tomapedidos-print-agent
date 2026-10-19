@@ -8,6 +8,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 // Item is one line in a print job, with optional modifiers and a free-form
@@ -45,6 +47,7 @@ type Options struct {
 	Copies           int
 	FeedLinesBefore  int
 	ItemDoubleHeight bool
+	EncodeANSI       bool // encode plain-text output as Windows-1252
 	Footer           string
 	QRCode           string
 }
@@ -134,10 +137,18 @@ func RenderTemplate(templateName string, codePage string, charsPerLine int, h He
 			}
 		},
 		"size": func(w, h int) string {
-			if w < 1 { w = 1 }
-			if w > 8 { w = 8 }
-			if h < 1 { h = 1 }
-			if h > 8 { h = 8 }
+			if w < 1 {
+				w = 1
+			}
+			if w > 8 {
+				w = 8
+			}
+			if h < 1 {
+				h = 1
+			}
+			if h > 8 {
+				h = 8
+			}
 			n := byte(((w - 1) << 4) | (h - 1))
 			return fmt.Sprintf("\x1d!%c", n)
 		},
@@ -159,28 +170,12 @@ func RenderTemplate(templateName string, codePage string, charsPerLine int, h He
 	if tmplName == "" {
 		tmplName = "kitchen"
 	}
-	
-	tmplPath := filepath.Join("templates", tmplName+".tmpl")
-	
-	tmpl := template.New(tmplName).Funcs(funcMap)
-	body, err := os.ReadFile(tmplPath)
-	if err != nil {
-		// Fallback to default.tmpl on disk
-		defaultPath := filepath.Join("templates", "default.tmpl")
-		body, err = os.ReadFile(defaultPath)
-	}
 
-	if err == nil {
-		tmpl, err = tmpl.Parse(string(body))
-		if err != nil {
-			return nil, fmt.Errorf("parse template %s: %w", tmplPath, err)
-		}
-	} else {
-		// Fallback to hardcoded string
-		tmpl, err = tmpl.Parse(defaultKitchenTemplate)
-		if err != nil {
-			return nil, err
-		}
+	tmpl := template.New(tmplName).Funcs(funcMap)
+	body, tmplPath := loadTemplateBody(tmplName, templateSearchDirs()...)
+	tmpl, err := tmpl.Parse(string(body))
+	if err != nil {
+		return nil, fmt.Errorf("parse template %s: %w", tmplPath, err)
 	}
 
 	var buf bytes.Buffer
@@ -237,6 +232,45 @@ func RenderTemplate(templateName string, codePage string, charsPerLine int, h He
 		return repeat, nil
 	}
 	return out, nil
+}
+
+// templateSearchDirs returns template roots in preferred search order.
+// Windows services often start in System32, so templates beside the agent
+// executable must take precedence over the working directory.
+func templateSearchDirs() []string {
+	var dirs []string
+	if executable, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Dir(executable))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, cwd)
+	}
+	return dirs
+}
+
+// resolveTemplatePathIn finds name under each supplied template root in order.
+func resolveTemplatePathIn(name string, dirs ...string) string {
+	for _, dir := range dirs {
+		path := filepath.Join(dir, "templates", name+".tmpl")
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+func loadTemplateBody(name string, dirs ...string) ([]byte, string) {
+	if path := resolveTemplatePathIn(name, dirs...); path != "" {
+		if body, err := os.ReadFile(path); err == nil {
+			return body, path
+		}
+	}
+	if path := resolveTemplatePathIn("default", dirs...); path != "" {
+		if body, err := os.ReadFile(path); err == nil {
+			return body, path
+		}
+	}
+	return []byte(defaultKitchenTemplate), "<default>"
 }
 
 // RenderKitchenPlainText produces plain-text bytes for office/laser printers.
@@ -331,15 +365,7 @@ func RenderKitchenPlainText(h Header, items []Item, opts Options) ([]byte, error
 		crlf()
 	}
 
-	if opts.Copies > 1 {
-		content := b.Bytes()
-		repeat := make([]byte, 0, len(content)*opts.Copies)
-		for i := 0; i < opts.Copies; i++ {
-			repeat = append(repeat, content...)
-		}
-		return repeat, nil
-	}
-	return b.Bytes(), nil
+	return finishPlainText(b.Bytes(), opts), nil
 }
 
 // RenderReceipt produces the ESC/POS bytes for a customer receipt / cash voucher.
@@ -613,15 +639,31 @@ func RenderReceiptPlainText(h Header, items []Item, opts Options) ([]byte, error
 		center("[QR: " + opts.QRCode + "]")
 	}
 
+	return finishPlainText(b.Bytes(), opts), nil
+}
+
+// finishPlainText applies the optional Windows-1252 conversion to rendered
+// text, then duplicates the complete byte stream when copies are requested.
+func finishPlainText(content []byte, opts Options) []byte {
+	if opts.EncodeANSI {
+		encoded := make([]byte, 0, len(content))
+		for _, r := range string(content) {
+			b, ok := charmap.Windows1252.EncodeRune(r)
+			if !ok {
+				b = '?'
+			}
+			encoded = append(encoded, b)
+		}
+		content = encoded
+	}
 	if opts.Copies > 1 {
-		content := b.Bytes()
 		repeat := make([]byte, 0, len(content)*opts.Copies)
 		for i := 0; i < opts.Copies; i++ {
 			repeat = append(repeat, content...)
 		}
-		return repeat, nil
+		return repeat
 	}
-	return b.Bytes(), nil
+	return content
 }
 
 // formatTwoColumns formats two strings across width chars, aligning left

@@ -1,9 +1,17 @@
 package queue
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tomapedidos/print-agent/internal/config"
+	"github.com/tomapedidos/print-agent/internal/printer"
 )
 
 // helper — creates an in-memory queue (no persistence).
@@ -95,6 +103,91 @@ func TestFailedJobStaysForInspection(t *testing.T) {
 	}
 	if j.Status != StatusFailed {
 		t.Errorf("Status = %q, want failed", j.Status)
+	}
+}
+
+type workerTestPrinter struct {
+	id       string
+	writeErr error
+}
+
+func (p *workerTestPrinter) ID() string                          { return p.id }
+func (p *workerTestPrinter) Open(context.Context) error          { return nil }
+func (p *workerTestPrinter) Write(context.Context, []byte) error { return p.writeErr }
+func (p *workerTestPrinter) Close() error                        { return nil }
+func (p *workerTestPrinter) Ping(context.Context) error          { return nil }
+
+func TestWorkerDoesNotRetryAmbiguousWriteFailures(t *testing.T) {
+	tests := []struct {
+		name          string
+		writeErr      error
+		wantStatus    Status
+		wantQueueSize int
+	}{
+		{
+			name:          "ambiguous write is terminal",
+			writeErr:      fmt.Errorf("socket write: %w", printer.ErrAmbiguousWrite),
+			wantStatus:    StatusFailed,
+			wantQueueSize: 0,
+		},
+		{
+			name:          "ordinary write error is retried",
+			writeErr:      errors.New("temporary printer error"),
+			wantStatus:    StatusQueued,
+			wantQueueSize: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q, err := New(2, time.Minute, filepath.Join(t.TempDir(), "jobs.db"), nil, nil)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer q.Close()
+
+			const printerID = "printer-a"
+			reg := printer.NewRegistry()
+			reg.Add(&workerTestPrinter{id: printerID, writeErr: tt.writeErr}, printer.Info{ID: printerID})
+			job, err := q.Submit(printerID, "job-1", []byte("ticket"), "")
+			if err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			job = q.Pop(printerID)
+			if job == nil {
+				t.Fatal("Pop returned nil")
+			}
+
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			worker := NewWorker(printerID, q, reg, config.Queue{RetryBackoffMs: []int{10}}, logger)
+			worker.processOne(context.Background(), job)
+
+			got, ok := q.Get(job.ID)
+			if !ok {
+				t.Fatal("job missing after worker processed the write error")
+			}
+			if got.Status != tt.wantStatus {
+				t.Errorf("job status = %q, want %q", got.Status, tt.wantStatus)
+			}
+			if got.Attempts != 1 {
+				t.Errorf("job attempts = %d, want 1", got.Attempts)
+			}
+			if got := q.DepthFor(printerID); got != tt.wantQueueSize {
+				t.Errorf("queued depth = %d, want %d", got, tt.wantQueueSize)
+			}
+			if errors.Is(tt.writeErr, printer.ErrAmbiguousWrite) {
+				if got.MaxAttempts != got.Attempts {
+					t.Errorf("ambiguous job MaxAttempts = %d, want %d", got.MaxAttempts, got.Attempts)
+				}
+			} else {
+				if got.MaxAttempts != 3 {
+					t.Errorf("ordinary failure MaxAttempts = %d, want 3", got.MaxAttempts)
+				}
+				if got.NextRetryAt.IsZero() {
+					t.Error("ordinary failure did not schedule a retry")
+				}
+			}
+		})
 	}
 }
 

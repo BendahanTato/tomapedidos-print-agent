@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -67,6 +68,17 @@ func (w *Worker) processOne(ctx context.Context, job *Job) {
 		return
 	}
 	if err := pr.Write(ctx, job.Payload); err != nil {
+		if errors.Is(err, printer.ErrAmbiguousWrite) {
+			w.registry.SetStatus(w.printerID, printer.StatusError, err.Error())
+			w.log.Error("ambiguous print write; job will not be retried; the print may have partially succeeded, operator should verify",
+				slog.String("job_id", job.ID),
+				slog.String("printer", w.printerID),
+				slog.String("error", err.Error()),
+			)
+			job.MaxAttempts = job.Attempts
+			w.queue.MarkFailed(job, err.Error())
+			return
+		}
 		w.log.Warn("print failed",
 			slog.String("job_id", job.ID),
 			slog.String("printer", w.printerID),
@@ -74,11 +86,11 @@ func (w *Worker) processOne(ctx context.Context, job *Job) {
 			slog.String("error", err.Error()),
 		)
 		w.registry.SetStatus(w.printerID, printer.StatusError, err.Error())
-		
+
 		// Calcular backoff y establecer NextRetryAt para evitar Head-of-Line Blocking
 		backoff := w.getBackoff(job.Attempts)
 		job.NextRetryAt = time.Now().Add(backoff)
-		
+
 		w.queue.MarkFailed(job, err.Error())
 		// Wake the loop so a later retry can run quickly.
 		w.queue.Wake()

@@ -2,10 +2,14 @@ package printer
 
 import (
 	"context"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tomapedidos/print-agent/internal/config"
 )
 
 func TestFilePrinterWrites(t *testing.T) {
@@ -65,6 +69,77 @@ func TestNetworkPrinterRejectsUnreachable(t *testing.T) {
 	}
 }
 
+func TestNetworkPrinterWriteFailureIsAmbiguous(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	closed := make(chan struct{})
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		if tcp, ok := conn.(*net.TCPConn); ok {
+			// Send a reset so the client observes a write failure instead
+			// of accepting buffered data after the peer has gone away.
+			_ = tcp.SetLinger(0)
+		}
+		_ = conn.Close()
+		close(closed)
+	}()
+
+	addr := listener.Addr().(*net.TCPAddr)
+	np := NewNetwork("test", "127.0.0.1", addr.Port)
+	np.SetTimeout(2 * time.Second)
+	defer np.Close()
+	if err := np.Open(context.Background()); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("server did not close the accepted connection")
+	}
+
+	// Wait until the peer's reset is visible on the client socket before
+	// writing, avoiding a race where a small payload fits in its send buffer.
+	_ = np.conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := np.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected the closed peer to be visible on the connection")
+	}
+
+	err = np.Write(context.Background(), make([]byte, 1<<20))
+	if err == nil {
+		t.Fatal("Write succeeded after the peer closed the connection")
+	}
+	if !errors.Is(err, ErrAmbiguousWrite) {
+		t.Fatalf("Write error %v does not wrap ErrAmbiguousWrite", err)
+	}
+}
+
+func TestNewFromConfigPropagatesNetworkTimeout(t *testing.T) {
+	printerConfig := config.Default().Printers[0]
+	printerConfig.Host = "127.0.0.1"
+	printerConfig.Port = 1 // No live printer is needed to construct the backend.
+	printerConfig.TimeoutMs = 23
+
+	pr, _, err := NewFromConfig(context.Background(), printerConfig)
+	if err != nil {
+		t.Fatalf("NewFromConfig: %v", err)
+	}
+	np, ok := pr.(*NetworkPrinter)
+	if !ok {
+		t.Fatalf("NewFromConfig returned %T, want *NetworkPrinter", pr)
+	}
+	defer np.Close()
+	if got, want := np.timeout, 23*time.Millisecond; got != want {
+		t.Errorf("network timeout = %v, want %v", got, want)
+	}
+}
+
 func TestDetectType(t *testing.T) {
 	tests := []struct {
 		makeAndModel string
@@ -86,4 +161,3 @@ func TestDetectType(t *testing.T) {
 		}
 	}
 }
-

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 )
@@ -21,13 +22,13 @@ type NetworkPrinter struct {
 }
 
 // NewNetwork returns a NetworkPrinter configured for host:port with a
-// per-operation timeout of 3 seconds (overridable via SetTimeout).
+// per-operation timeout of 5 seconds (overridable via SetTimeout).
 func NewNetwork(id, host string, port int) *NetworkPrinter {
 	return &NetworkPrinter{
 		id:      id,
 		host:    host,
 		port:    port,
-		timeout: 3 * time.Second,
+		timeout: 5 * time.Second,
 	}
 }
 
@@ -69,11 +70,15 @@ func (p *NetworkPrinter) Write(ctx context.Context, payload []byte) error {
 	if err := p.conn.SetWriteDeadline(time.Now().Add(p.timeout)); err != nil {
 		return fmt.Errorf("set write deadline: %w", err)
 	}
-	if _, err := p.conn.Write(payload); err != nil {
+	n, err := p.conn.Write(payload)
+	if err == nil && n != len(payload) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		// On any write error, drop the connection so the next attempt
 		// reconnects cleanly instead of failing forever.
 		_ = p.Close()
-		return fmt.Errorf("write to %s:%d: %w", p.host, p.port, err)
+		return fmt.Errorf("%w: write to %s:%d: %w", ErrAmbiguousWrite, p.host, p.port, err)
 	}
 	return nil
 }
@@ -102,3 +107,7 @@ func (p *NetworkPrinter) Ping(ctx context.Context) error {
 
 // ErrNetworkUnreachable is returned when the host refuses the connection.
 var ErrNetworkUnreachable = errors.New("network printer unreachable")
+
+// ErrAmbiguousWrite marks a network write failure whose payload may have been
+// partially or fully received by the printer. Such jobs must not be retried.
+var ErrAmbiguousWrite = errors.New("network printer write outcome is ambiguous")
