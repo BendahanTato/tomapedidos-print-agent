@@ -68,6 +68,7 @@ type Panel struct {
 type Config struct {
 	Port     int       `json:"port"`
 	Bind     string    `json:"bind"`
+	LogFile  string    `json:"log_file,omitempty"`
 	Tenant   Tenant    `json:"tenant"`
 	Printers []Printer `json:"printers"`
 	Queue    Queue     `json:"queue"`

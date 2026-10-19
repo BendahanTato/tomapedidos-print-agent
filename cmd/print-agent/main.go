@@ -195,7 +195,27 @@ func runStart(args []string, stdout, stderr *os.File) {
 }
 
 func runAgent(ctx context.Context, configPath string, port int, bind string, logLevel string, stdout, stderr io.Writer) error {
-	log := logging.New(logging.Level(logLevel), "print-agent", version.Version)
+	level := logging.Level(logLevel)
+	isWindowsService, _ := service.IsWindowsService()
+	logPath := ""
+	if isWindowsService {
+		programData := os.Getenv("ProgramData")
+		if programData == "" {
+			programData = os.Getenv("PROGRAMDATA")
+		}
+		if programData == "" {
+			programData = `C:\ProgramData`
+		}
+		logPath = filepath.Join(programData, "Tomapedidos", "logs", "print-agent.log")
+	}
+	log, logCloser := openAgentLogger(level, logPath)
+	defer func() {
+		if logCloser != nil {
+			if err := logCloser.Close(); err != nil {
+				log.Warn("log sink close failed", slog.String("error", err.Error()))
+			}
+		}
+	}()
 
 	cfgStore, err := config.Load(configPath, true)
 	if err != nil {
@@ -203,9 +223,18 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 		fmt.Fprintf(stderr, "config load failed: %v\n", err)
 		return err
 	}
+	cfg := cfgStore.Get()
+	if cfg.LogFile != "" && cfg.LogFile != logPath {
+		newLog, newCloser := openAgentLogger(level, cfg.LogFile)
+		if logCloser != nil {
+			if closeErr := logCloser.Close(); closeErr != nil {
+				newLog.Warn("previous log sink close failed", slog.String("error", closeErr.Error()))
+			}
+		}
+		log, logCloser, logPath = newLog, newCloser, cfg.LogFile
+	}
 	log.Info("config loaded", slog.String("path", cfgStore.Path()))
 
-	cfg := cfgStore.Get()
 	listenHost := cfg.Bind
 	if bind != "" {
 		listenHost = bind
@@ -306,6 +335,22 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 	}
 	log.Info("bye")
 	return nil
+}
+
+func openAgentLogger(level slog.Level, path string) (*slog.Logger, io.Closer) {
+	if path == "" {
+		return logging.New(level, "print-agent", version.Version), nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log := logging.New(level, "print-agent", version.Version)
+		log.Error("could not create log directory; falling back to stdout",
+			slog.String("path", path),
+			slog.String("error", err.Error()),
+		)
+		return log, nil
+	}
+	log, closer, _ := logging.NewWithRotatingFile(level, "print-agent", version.Version, path)
+	return log, closer
 }
 
 // ---------------------------------------------------------------------------

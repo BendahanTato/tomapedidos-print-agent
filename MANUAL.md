@@ -140,6 +140,14 @@ ejemplo en el primer arranque si no lo encuentra.
 | `queue.persist_path` | Ruta al archivo SQLite donde se guardan los jobs (vacío = solo en memoria). |
 | `panel.pin` | PIN de 4 dígitos para acceder al panel web. |
 
+### Logs
+
+En Windows, el servicio guarda los logs en
+`%ProgramData%\Tomapedidos\logs\print-agent.log`; los archivos anteriores
+rotan a `.1`, `.2` y `.3`. Para elegir otra ubicación, agregá el campo raíz
+`log_file` con la ruta deseada en el JSON. Sin ese campo, en ejecución manual
+y en macOS/Linux los logs siguen saliendo por stdout.
+
 ### ¿De dónde saco `tenant.id` y `branch_id`?
 
 Abrí tomaPedidos en el navegador como cajero/admin, andá a

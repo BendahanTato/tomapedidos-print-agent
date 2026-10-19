@@ -27,6 +27,38 @@ func TestLoadMissingCreatesDefault(t *testing.T) {
 	}
 }
 
+func TestConfigLogFileField(t *testing.T) {
+	cfg := Default()
+	if cfg.LogFile != "" {
+		t.Fatalf("default log_file = %q, want empty", cfg.LogFile)
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal default config: %v", err)
+	}
+	if strings.Contains(string(raw), `"log_file"`) {
+		t.Fatalf("empty log_file should be omitted: %s", raw)
+	}
+
+	const path = `C:\logs\print-agent.log`
+	var decoded Config
+	configJSON, err := json.Marshal(map[string]string{"log_file": path})
+	if err != nil {
+		t.Fatalf("marshal log_file: %v", err)
+	}
+	if err := json.Unmarshal(configJSON, &decoded); err != nil {
+		t.Fatalf("unmarshal log_file: %v", err)
+	}
+	if decoded.LogFile != path {
+		t.Errorf("log_file = %q, want %q", decoded.LogFile, path)
+	}
+	decoded = Default()
+	decoded.LogFile = path
+	if err := decoded.Validate(); err != nil {
+		t.Errorf("Validate with log_file: %v", err)
+	}
+}
+
 func TestLoadMissingNoCreate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "missing.json")
