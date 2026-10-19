@@ -61,6 +61,58 @@ Si la impresión falla en un equipo poco habitual después del cambio de cuenta,
 sc.exe config com.tomapedidos.print-agent obj= LocalSystem
 ```
 
+### Si Windows muestra una advertencia
+
+El ejecutable **no está firmado**, así que es normal ver estos dos avisos. No
+indican que el archivo esté infectado: indican que Windows no conoce al editor.
+
+- **SmartScreen** (“Windows protegió tu PC”): clic en **Más información** →
+  **Ejecutar de todas formas**. Aparece una vez por archivo descargado.
+  Si querés evitar el aviso en el futuro, desbloqueá el archivo antes de usarlo:
+  `Unblock-File -Path "<ruta>\print-agent.exe"`
+- **“La ejecución de scripts está deshabilitada en este sistema”**: es la
+  directiva de ejecución de PowerShell, no un problema del agente. Para una
+  instalación puntual:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File "$installer"
+  ```
+
+  (No es necesario cambiar la política de forma permanente.)
+
+- **El instalador no se puede ejecutar por política de la empresa**: usá la
+  instalación manual de más abajo, que no requiere scripts.
+
+### Instalación manual (sin script)
+
+Alternativa para equipos donde PowerShell está bloqueado. Requiere un
+PowerShell **elevado** y el `.exe` descargado desde
+[Releases](https://github.com/BendahanTato/tomapedidos-print-agent/releases):
+
+```powershell
+$dest  = "$env:ProgramFiles\Tomapedidos\PrintAgent"
+$data  = "$env:ProgramData\Tomapedidos"
+$exe   = "$dest\print-agent.exe"
+$conf  = "$data\config\printers.json"
+
+New-Item -ItemType Directory -Force -Path $dest, "$data\config", "$data\data", "$data\logs" | Out-Null
+Move-Item "$env:TEMP\print-agent-windows-amd64.exe" $exe -Force    # ajustá el nombre si es arm64
+
+& $exe init-config --config $conf
+& $exe install --config $conf            # registra el servicio como NT SERVICE\com.tomapedidos.print-agent
+
+# Permisos para la cuenta del servicio (SQLite necesita crear sus archivos -wal/-shm)
+foreach ($d in @("$data\config", "$data\data", "$data\logs")) {
+  icacls.exe $d /grant "NT SERVICE\com.tomapedidos.print-agent:(OI)(CI)F" "Users:(OI)(CI)M"
+}
+
+Start-Service com.tomapedidos.print-agent
+Invoke-RestMethod http://127.0.0.1:4510/health
+```
+
+Esta vía **no** migra una instalación vieja ni verifica el SHA256: reservala
+para el caso puntual en que el script no se pueda ejecutar.
+
 ### Descarga manual
 
 Si preferís bajar el binario a mano, entrá a la página de

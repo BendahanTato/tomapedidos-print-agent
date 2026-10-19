@@ -8,6 +8,45 @@ Requisitos de la máquina de prueba: Windows 10/11 en **español** (importante,
 ver 3), impresora térmica ESC/POS y —si se usan— impresora de oficina,
 PowerShell **elevado** y el release publicado con su `SHA256SUMS`.
 
+> **Escenario real: sin firma de código.** Los ítems marcados con 🔒 sólo
+> cambian con un certificado; todo el resto se puede ——y debe—— validar sin
+> pagar nada. Sin firma es **esperable** ver el cartel de SmartScreen en la
+> primera ejecución y que el explorador pregunte antes de conservar el archivo;
+> eso no es una detección de antivirus, es falta de reputación de editor.
+
+## Prueba express (~15 minutos, sin firma)
+
+Objetivo: saber si **imprime** y si el servicio queda sano. Nada más.
+
+```powershell
+# 1. Traer el instalador y correrlo
+$installer = "$env:TEMP\install-print-agent.ps1"
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.ps1 -OutFile $installer -UseBasicParsing
+powershell -ExecutionPolicy Bypass -File $installer
+
+# 2. ¿Quedó vivo?
+Invoke-RestMethod http://127.0.0.1:4510/health
+Invoke-RestMethod http://127.0.0.1:4510/printers
+
+# 3. Imprimir un ticket de prueba (con tildes)
+$body = @{
+  printer_id = "<id-del-paso-2>"
+  header = @{ order_number = 9999; customer_name = "José Ñandú"; customer_address = "Dirección 45 • ¿Delivery?" }
+  items = @(@{ qty = 2; name = "Hamburguesa doble"; notes = "Sin cebolla" })
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Uri http://127.0.0.1:4510/print -Method Post -Body $body -ContentType "application/json"
+
+# 4. Ver el resultado y el log
+Invoke-RestMethod http://127.0.0.1:4510/jobs
+Get-Content "$env:ProgramData\Tomapedidos\logs\print-agent.log" -Tail 30
+```
+
+Resultado esperado: `/health` responde, el ticket sale con tildes correctas,
+y el job figura `printed`. Si algo falla, pegá la salida del paso 4.
+
+Si el script no arranca por política de PowerShell, usá la **instalación
+manual** documentada en `MANUAL.md` (no requiere scripts).
+
 ---
 
 ## 0. Preparación
@@ -131,11 +170,39 @@ Start-Service com.tomapedidos.print-agent
 
 ## 6. Antivirus / reputación
 
+> Sin firma, los dos primeros ítems son los únicos que importan. Lo demás
+> 🔒 queda pendiente hasta que exista certificado.
+
 - [ ] Defender: sin detecciones en el histórico tras la instalación
+- [ ] Anotar **exactamente** qué mostró Windows al ejecutar por primera vez
+      (cartel de SmartScreen / aviso del navegador / nada) y si alcanzó con
+      “Más información → Ejecutar de todas formas”
 - [ ] El instalador no creó exclusiones de AV (no debe: eso empeora el perfil)
-- [ ] **Repetir con firma habilitada:** SmartScreen limpio y binario firmado
-      (`signtool verify /pa print-agent.exe`)
-- [ ] Si algún motor lo marca: enviar el falso positivo y registrar el hash
+- [ ] 🔒 Repetir con firma habilitada: SmartScreen limpio
+- [ ] 🔒 `signtool verify /pa print-agent.exe`
+- [ ] Si algún motor lo marca como malware (no “desconocido”): registrar el
+      nombre del motor y el hash, y enviar el falso positivo
+
+---
+
+## Diagnóstico para compartir
+
+Si algo falla, este bloque junta todo lo necesario para diagnosticar sin
+pedir más ida y vuelta (PowerShell elevado):
+
+```powershell
+$svc = "com.tomapedidos.print-agent"
+Get-CimInstance Win32_Service -Filter "Name='$svc'" | Select-Object Name, StartName, PathName, State, StartMode
+Get-Service $svc | Select-Object Status
+Invoke-RestMethod http://127.0.0.1:4510/health           2>$null | ConvertTo-Json
+Invoke-RestMethod http://127.0.0.1:4510/printers         2>$null | ConvertTo-Json -Depth 6
+Invoke-RestMethod "http://127.0.0.1:4510/jobs?limit=5"   2>$null | ConvertTo-Json -Depth 6
+Get-Content "$env:ProgramData\Tomapedidos\logs\print-agent.log" -Tail 50
+Get-Content "$env:ProgramData\Tomapedidos\config\printers.json"
+netstat -ano | findstr 4510
+Get-WinEvent -LogName System -MaxEvents 15 |
+  Where-Object { $_.Message -like "*$svc*" } | Format-List TimeCreated, Message
+```
 
 ---
 
