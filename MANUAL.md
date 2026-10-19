@@ -34,14 +34,32 @@ Esto:
 ### Windows PowerShell (como administrador)
 
 ```powershell
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.ps1 -UseBasicParsing | Invoke-Expression
+$installer = "$env:TEMP\install-print-agent.ps1"
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.ps1 -OutFile $installer -UseBasicParsing
+& $installer
 ```
 
 Esto:
-1. Descarga `print-agent-windows-amd64.exe` a `%LOCALAPPDATA%\tomapedidos\`.
-2. Crea una config de ejemplo.
-3. Registra el servicio de Windows.
-4. Lo arranca.
+1. Descarga y verifica el SHA256 del ejecutable antes de instalarlo en `%ProgramFiles%\Tomapedidos\PrintAgent\`.
+2. Guarda la configuración en `%ProgramData%\Tomapedidos\config\printers.json`, la cola SQLite en `%ProgramData%\Tomapedidos\data\jobs.db` y los logs en `%ProgramData%\Tomapedidos\logs\`.
+3. Registra el servicio con la cuenta virtual `NT SERVICE\com.tomapedidos.print-agent`; el ejecutable queda protegido por los permisos heredados de Program Files.
+4. Comprueba `http://127.0.0.1:4510/health` antes de informar que la instalación terminó.
+
+En una instalación existente, el instalador detiene el servicio, hace una copia fechada de `printers.json`, `jobs.db*` y de la configuración del servicio (`service-before.txt`); si ya había un binario en Program Files, también guarda una copia para rollback. Después migra los archivos a `%ProgramData%`. El ejecutable antiguo y los datos no se quitan hasta que el servicio nuevo supera la comprobación de salud. Si falla, intenta restaurar el `binPath` anterior bajo `LocalSystem` y volver a iniciar el servicio. Las copias quedan en `%ProgramData%\Tomapedidos\backups\migration-<fecha-hora>\` para recuperación manual.
+
+Administración del servicio (PowerShell elevado):
+
+```powershell
+& "$env:ProgramFiles\Tomapedidos\PrintAgent\print-agent.exe" status-svc
+Stop-Service -Name com.tomapedidos.print-agent
+Start-Service -Name com.tomapedidos.print-agent
+```
+
+Si la impresión falla en un equipo poco habitual después del cambio de cuenta, se puede recuperar el comportamiento anterior sin quitar el binario de Program Files:
+
+```powershell
+sc.exe config com.tomapedidos.print-agent obj= LocalSystem
+```
 
 ### Descarga manual
 
@@ -49,13 +67,20 @@ Si preferís bajar el binario a mano, entrá a la página de
 [Releases](https://github.com/BendahanTato/tomapedidos-print-agent/releases) y elegí
 el `.exe`/`.bin` que corresponda a tu SO.
 
+### Code signing
+
+Los ejecutables Windows incluyen VERSIONINFO y un manifiesto `asInvoker` (no requieren elevación); el instalador verifica el SHA256 publicado antes de instalar.
+
+Para habilitar el paso de firma de este workflow, configurar una cuenta/perfil de Azure Trusted Signing y un service principal. En **Settings → Secrets and variables → Actions**, crear las variables `SIGNING_ENABLED=true`, `AZURE_TRUSTED_SIGNING_ENDPOINT`, `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`, `AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME` y los secretos `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. Un certificado EV/OV también es una opción, pero requiere adaptar el paso de firma del workflow. Hasta configurar la firma, las releases siguen sin firmar y Windows SmartScreen puede mostrar una advertencia.
+
 ---
 
 ## 3. Configuración
 
-El archivo `printers.json` (por defecto en `~/.config/tomapedidos/` o
-`%APPDATA%\tomapedidos\`) define qué impresoras existen y cómo hablarles.
-El agente genera uno de ejemplo en el primer arranque si no lo encuentra.
+El archivo `printers.json` define qué impresoras existen y cómo hablarles.
+En macOS/Linux se guarda por defecto en `~/.config/tomapedidos/`; en
+Windows, en `%ProgramData%\Tomapedidos\config\`. El agente genera uno de
+ejemplo en el primer arranque si no lo encuentra.
 
 ### Estructura mínima
 
@@ -174,8 +199,9 @@ PC no puede contactar al agente en `http://127.0.0.1:4510`. Verificá:
 1. ¿El agente está corriendo?  
    `print-agent status-svc` (o `sc query com.tomapedidos.print-agent` en
    Windows).
-2. ¿El binario está en el PATH correcto? Revisá que el plist / unit /
-   servicio apunte al ejecutable real.
+2. ¿El binario está en la ruta correcta? En Windows, el servicio usa
+   `%ProgramFiles%\Tomapedidos\PrintAgent\print-agent.exe`; revisá también
+   que el plist / unit de macOS/Linux apunte al ejecutable real.
 3. ¿El puerto 4510 está libre? El agente lo abre en loopback solamente.
 4. ¿El firewall del SO está bloqueando `127.0.0.1:4510`? Normalmente no,
    pero algunos antivirus restringen loopback.
@@ -337,3 +363,8 @@ funcionar con el agente configurando `type: "usb"`.
 3. `print-agent start-svc`
 4. La cola de jobs pendientes se recarga del archivo SQLite
    automáticamente si tenés `persist_path` configurado.
+
+En Windows, ejecutá nuevamente el instalador como administrador: descarga y
+verifica la versión, reconfigura el servicio existente sin borrarlo y valida
+su endpoint de salud. La configuración, los datos y los logs permanecen en
+`%ProgramData%\Tomapedidos\{config,data,logs}`.
