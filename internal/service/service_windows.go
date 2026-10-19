@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows/svc"
@@ -19,6 +20,58 @@ func New() Manager {
 	return &scmManager{label: Label}
 }
 
+// virtualAccountName returns the least-privilege virtual service account SCM
+// associates with this service ("NT SERVICE\<label>").
+//
+// Virtual accounts need NO password: x/sys encodes an empty Password string as
+// NULL (see toPtr in mgr), which is exactly the documented contract for
+// virtual/computer accounts. Previously the service ran as LocalSystem with the
+// executable in a user-writable directory (%LOCALAPPDATA), which let any
+// user-session process replace the exe and gain SYSTEM on the next start, and
+// is also a standard antivirus heuristic trigger.
+func (m *scmManager) virtualAccountName() string {
+	return `NT SERVICE\` + m.label
+}
+
+// binaryPath builds the SCM command line, quoting both paths so that
+// directories containing spaces keep working.
+func binaryPath(exePath, configPath string) string {
+	return syscall.EscapeArg(exePath) + " start --config " + syscall.EscapeArg(configPath)
+}
+
+// recoveryActions tells SCM to restart the agent after crashes. Without them a
+// panic leaves the service dead until the machine reboots.
+func recoveryActions() []mgr.RecoveryAction {
+	return []mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 60 * time.Second},
+	}
+}
+
+// reconfigure updates an already-installed service in place: new binary path,
+// least-privilege account and recovery actions.
+func (m *scmManager) reconfigure(s *mgr.Service, exePath, configPath string) error {
+	// Round-trip through Service.Config() instead of building a partial Config:
+	// UpdateConfig passes ServiceType, StartType and ErrorControl verbatim to
+	// ChangeServiceConfig, and zero is NOT SERVICE_NO_CHANGE (that is
+	// 0xFFFFFFFF) — StartType 0 would silently mean SERVICE_BOOT_START.
+	cur, err := s.Config()
+	if err != nil {
+		return fmt.Errorf("read service %q config: %w", m.label, err)
+	}
+	cur.BinaryPathName = binaryPath(exePath, configPath)
+	cur.ServiceStartName = m.virtualAccountName()
+	cur.Password = "" // NULL — both source and target accounts are passwordless
+	if err := s.UpdateConfig(cur); err != nil {
+		return fmt.Errorf("update service %q config: %w", m.label, err)
+	}
+	if err := s.SetRecoveryActions(recoveryActions(), 86400); err != nil {
+		return fmt.Errorf("set recovery actions for service %q: %w", m.label, err)
+	}
+	return nil
+}
+
 // Install creates a Windows service via SCM using the Win32 API.
 func (m *scmManager) Install(exePath, configPath string) error {
 	sm, closer, err := connect()
@@ -29,14 +82,18 @@ func (m *scmManager) Install(exePath, configPath string) error {
 
 	s, err := sm.OpenService(m.label)
 	if err == nil {
-		s.Close()
-		return fmt.Errorf("service %q already exists", m.label)
+		defer s.Close()
+		// Already installed: reconfigure in place. Deleting and recreating
+		// would leave a window with no registration and lose local SCM state.
+		return m.reconfigure(s, exePath, configPath)
 	}
 
 	cfg := mgr.Config{
-		DisplayName: "TomaPedidos Print Agent",
-		Description: "Servicio local de impresion para TomaPedidos",
-		StartType:   mgr.StartAutomatic,
+		DisplayName:      "TomaPedidos Print Agent",
+		Description:      "Servicio local de impresion para TomaPedidos",
+		StartType:        mgr.StartAutomatic,
+		ServiceStartName: m.virtualAccountName(),
+		Password:         "", // NULL required for virtual accounts; no password.
 	}
 
 	s, err = sm.CreateService(m.label, exePath, cfg, "start", "--config", configPath)
@@ -44,6 +101,10 @@ func (m *scmManager) Install(exePath, configPath string) error {
 		return fmt.Errorf("create service %q: %w", m.label, err)
 	}
 	defer s.Close()
+
+	if err := s.SetRecoveryActions(recoveryActions(), 86400); err != nil {
+		return fmt.Errorf("set recovery actions for service %q: %w", m.label, err)
+	}
 	return nil
 }
 
@@ -61,8 +122,22 @@ func (m *scmManager) Uninstall() error {
 	}
 	defer s.Close()
 
-	// Stop if running
-	_, _ = s.Control(svc.Stop)
+	// Stop if running. Control() returns as soon as the request is delivered, so
+	// wait until the service is actually stopped: Delete() on a running service
+	// only marks it for deletion and leaves the executable locked until reboot.
+	if _, err := s.Control(svc.Stop); err == nil {
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			status, qerr := s.Query()
+			if qerr != nil || status.State == svc.Stopped {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("service %q did not stop within 30s", m.label)
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
 
 	if err := s.Delete(); err != nil {
 		return fmt.Errorf("delete service %q: %w", m.label, err)
