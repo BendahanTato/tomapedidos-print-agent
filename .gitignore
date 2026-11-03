@@ -1,6 +1,8 @@
 # Build artefacts
 /print-agent
 /print-agent-*
+*.exe
+data/*.db
 /dist/
 
 # Local configs (each operator copies printers.example.json)

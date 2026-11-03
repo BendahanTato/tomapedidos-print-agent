@@ -1,5 +1,4 @@
 {{esc "center"}}{{size 2 2}}{{esc "bold"}}TICKET DE CAJA{{size 1 1}}{{esc "normal"}}
-PEDIDO #{{.Header.OrderNumber}}
 {{if .Header.CreatedAt}}{{.Header.CreatedAt | formatTime}}{{end}}
 {{if .Header.DeliveryType}}{{.Header.DeliveryType | deliveryLabel}}{{end}}
 {{esc "left"}}{{sep "="}}
