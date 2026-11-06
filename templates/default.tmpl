@@ -1,4 +1,5 @@
-{{esc "center"}}{{size 2 2}}{{esc "bold"}}PEDIDO #{{.Header.OrderNumber}}{{size 1 1}}{{esc "normal"}}
+{{if .Header.OrderNumber}}{{esc "center"}}{{size 2 2}}{{esc "bold"}}PEDIDO #{{.Header.OrderNumber}}{{size 1 1}}{{esc "normal"}}
+{{end}}
 {{if .Header.CreatedAt}}{{.Header.CreatedAt | formatTime}}{{end}}
 {{if .Header.DeliveryType}}{{.Header.DeliveryType | deliveryLabel}}{{end}}
 {{esc "left"}}{{sep "-"}}
@@ -6,7 +7,7 @@
 {{end}}{{if .Header.CustomerPhone}}Tel: {{.Header.CustomerPhone}}
 {{end}}{{if .Header.Address}}Dir: {{.Header.Address}}
 {{end}}{{sep "-"}}
-{{range .Items}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{esc "bold"}}{{.Qty | formatQty}} {{esc "normal"}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{.Name | truncate}}{{size 1 1}}
+{{range .Items}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{esc "bold"}}{{if .Qty}}{{.Qty | formatQty}} {{end}}{{esc "normal"}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{.Name | truncate}}{{size 1 1}}
 {{range .Modifiers}}  - {{.}}
 {{end}}{{if .Notes}}  OBS: {{.Notes}}
 {{end}}{{esc "normal"}}{{end}}{{sep "-"}}

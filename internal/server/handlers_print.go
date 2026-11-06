@@ -294,7 +294,7 @@ func renderPreview(req PrintJob) string {
 			Notes:     it.Notes,
 		})
 	}
-	opts := escpos.Options{Copies: req.Options.Copies}
+	opts := escpos.Options{Copies: req.Options.Copies, Footer: req.Footer}
 	b, err := escpos.RenderKitchenPlainText(header, items, opts)
 	if err != nil {
 		return ""

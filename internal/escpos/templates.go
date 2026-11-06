@@ -80,18 +80,33 @@ func deliveryLabel(t string) string {
 	}
 }
 
-const defaultKitchenTemplate = `{{esc "center"}}{{size 2 2}}{{esc "bold"}}PEDIDO #{{.Header.OrderNumber}}{{size 1 1}}{{esc "normal"}}
-{{if .Header.CreatedAt}}{{.Header.CreatedAt | formatTime}}{{end}}
+const defaultKitchenTemplate = `{{if .Header.OrderNumber}}{{esc "center"}}{{size 2 2}}{{esc "bold"}}PEDIDO #{{.Header.OrderNumber}}{{size 1 1}}{{esc "normal"}}
+{{end}}{{if .Header.CreatedAt}}{{.Header.CreatedAt | formatTime}}{{end}}
 {{if .Header.DeliveryType}}{{.Header.DeliveryType | deliveryLabel}}{{end}}
 {{esc "left"}}{{sep "-"}}
 {{if .Header.CustomerName}}Cliente: {{.Header.CustomerName}}
 {{end}}{{if .Header.CustomerPhone}}Tel: {{.Header.CustomerPhone}}
 {{end}}{{if .Header.Address}}Dir: {{.Header.Address}}
 {{end}}{{sep "-"}}
-{{range .Items}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{esc "bold"}}{{.Qty | formatQty}} {{esc "normal"}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{.Name | truncate}}{{size 1 1}}
+{{range .Items}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{esc "bold"}}{{if .Qty}}{{.Qty | formatQty}} {{end}}{{esc "normal"}}{{if $.Opts.ItemDoubleHeight}}{{size 1 2}}{{end}}{{.Name | truncate}}{{size 1 1}}
 {{range .Modifiers}}  - {{.}}
 {{end}}{{if .Notes}}  OBS: {{.Notes}}
 {{end}}{{esc "normal"}}{{end}}{{sep "-"}}`
+
+const defaultReceiptTemplate = `{{esc "center"}}{{size 2 2}}{{esc "bold"}}TICKET DE CAJA{{size 1 1}}{{esc "normal"}}
+{{if .Header.CreatedAt}}{{.Header.CreatedAt | formatTime}}{{end}}
+{{if .Header.DeliveryType}}{{.Header.DeliveryType | deliveryLabel}}{{end}}
+{{esc "left"}}{{sep "="}}
+{{if .Header.CustomerName}}Cliente: {{.Header.CustomerName}}
+{{end}}{{if .Header.CustomerPhone}}Tel: {{.Header.CustomerPhone}}
+{{end}}{{if .Header.Address}}Dir: {{.Header.Address}}
+{{end}}{{sep "="}}
+{{range .Items}}{{esc "bold"}}{{if .Qty}}{{.Qty | formatQty}} {{end}}{{.Name | truncate}}{{esc "normal"}}
+  {{if .Subtotal}}{{.Subtotal | formatMoney}}{{end}}
+{{range .Modifiers}}  - {{.}}
+{{end}}{{end}}{{sep "="}}
+{{if .Header.PaymentMethod}}Pago: {{.Header.PaymentMethod}}
+{{end}}{{esc "center"}}¡Gracias por su compra!{{esc "normal"}}`
 
 type templateData struct {
 	Header Header
@@ -177,7 +192,11 @@ func RenderTemplate(templateName string, codePage string, charsPerLine int, h He
 		}
 	} else {
 		// Fallback to hardcoded string
-		tmpl, err = tmpl.Parse(defaultKitchenTemplate)
+		fallback := defaultKitchenTemplate
+		if tmplName == "receipt" || tmplName == "caja" || tmplName == "cash" {
+			fallback = defaultReceiptTemplate
+		}
+		tmpl, err = tmpl.Parse(fallback)
 		if err != nil {
 			return nil, err
 		}
@@ -283,7 +302,9 @@ func RenderKitchenPlainText(h Header, items []Item, opts Options) ([]byte, error
 
 	// Header
 	sep()
-	center(fmt.Sprintf("PEDIDO #%d", h.OrderNumber))
+	if h.OrderNumber > 0 {
+		center(fmt.Sprintf("PEDIDO #%d", h.OrderNumber))
+	}
 
 	if t := formatTime(h.CreatedAt); t != "" {
 		center(t)
@@ -305,12 +326,28 @@ func RenderKitchenPlainText(h Header, items []Item, opts Options) ([]byte, error
 	sep()
 
 	for _, it := range items {
-		line(fmt.Sprintf("%s %s", formatQty(it.Qty), truncate(it.Name, width-4)))
+		qtyStr := formatQty(it.Qty)
+		if qtyStr != "" {
+			line(fmt.Sprintf("%s %s", qtyStr, truncate(it.Name, width-4)))
+		} else {
+			line(truncate(it.Name, width))
+		}
 		for _, m := range it.Modifiers {
 			line("  - " + m)
 		}
 		if it.Notes != "" {
 			line("  OBS: " + it.Notes)
+		}
+	}
+
+	if opts.Footer != "" {
+		sep()
+		lines := strings.Split(opts.Footer, "\n")
+		for _, l := range lines {
+			trimmed := strings.TrimSpace(l)
+			if trimmed != "" {
+				center(trimmed)
+			}
 		}
 	}
 	sep()
