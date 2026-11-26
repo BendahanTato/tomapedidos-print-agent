@@ -4,10 +4,16 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/tomapedidos/print-agent/internal/config"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -72,8 +78,19 @@ func (m *scmManager) reconfigure(s *mgr.Service, exePath, configPath string) err
 	return nil
 }
 
-// Install creates a Windows service via SCM using the Win32 API.
+// Install creates or reconfigures the Windows service via SCM, prepares
+// ProgramData directories, seeds/migrates config if needed, and grants
+// directory ACLs using locale-independent SIDs.
 func (m *scmManager) Install(exePath, configPath string) error {
+	absConfig, err := filepath.Abs(configPath)
+	if err == nil {
+		configPath = absConfig
+	}
+	configDir, dataDir, logsDir, err := ensureServiceDirsAndConfig(configPath)
+	if err != nil {
+		return err
+	}
+
 	sm, closer, err := connect()
 	if err != nil {
 		return fmt.Errorf("connect SCM: %w", err)
@@ -83,9 +100,11 @@ func (m *scmManager) Install(exePath, configPath string) error {
 	s, err := sm.OpenService(m.label)
 	if err == nil {
 		defer s.Close()
-		// Already installed: reconfigure in place. Deleting and recreating
-		// would leave a window with no registration and lose local SCM state.
-		return m.reconfigure(s, exePath, configPath)
+		stopAndWait(s, 30*time.Second)
+		if err := m.reconfigure(s, exePath, configPath); err != nil {
+			return err
+		}
+		return m.grantDataDirPermissions(configDir, dataDir, logsDir)
 	}
 
 	cfg := mgr.Config{
@@ -104,6 +123,110 @@ func (m *scmManager) Install(exePath, configPath string) error {
 
 	if err := s.SetRecoveryActions(recoveryActions(), 86400); err != nil {
 		return fmt.Errorf("set recovery actions for service %q: %w", m.label, err)
+	}
+	return m.grantDataDirPermissions(configDir, dataDir, logsDir)
+}
+
+func stopAndWait(s *mgr.Service, timeout time.Duration) {
+	if _, err := s.Control(svc.Stop); err != nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		status, qerr := s.Query()
+		if qerr != nil || status.State == svc.Stopped {
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+func ensureServiceDirsAndConfig(configPath string) (configDir, dataDir, logsDir string, err error) {
+	configDir = filepath.Dir(configPath)
+	dataRoot := filepath.Dir(configDir)
+	if !strings.EqualFold(filepath.Base(configDir), "config") {
+		pd := os.Getenv("ProgramData")
+		if pd == "" {
+			pd = `C:\ProgramData`
+		}
+		dataRoot = filepath.Join(pd, "Tomapedidos")
+	}
+	dataDir = filepath.Join(dataRoot, "data")
+	logsDir = filepath.Join(dataRoot, "logs")
+
+	for _, dir := range []string{configDir, dataDir, logsDir} {
+		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+			return "", "", "", fmt.Errorf("create directory %q: %w", dir, mkErr)
+		}
+	}
+
+	jobsPath := filepath.Join(dataDir, "jobs.db")
+	// Migrate legacy %APPDATA%\tomapedidos files if present and target does not exist yet.
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		legacyDir := filepath.Join(appData, "tomapedidos")
+		legacyCfg := filepath.Join(legacyDir, "printers.json")
+		if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
+			if raw, readErr := os.ReadFile(legacyCfg); readErr == nil {
+				_ = os.WriteFile(configPath, raw, 0o644)
+			}
+		}
+		if _, statErr := os.Stat(jobsPath); os.IsNotExist(statErr) {
+			if matches, _ := filepath.Glob(filepath.Join(legacyDir, "jobs.db*")); len(matches) > 0 {
+				for _, src := range matches {
+					if raw, readErr := os.ReadFile(src); readErr == nil {
+						_ = os.WriteFile(filepath.Join(dataDir, filepath.Base(src)), raw, 0o600)
+					}
+				}
+			}
+		}
+	}
+
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
+		starter := config.Default()
+		starter.Queue.PersistPath = jobsPath
+		b, mErr := json.MarshalIndent(starter, "", "  ")
+		if mErr != nil {
+			return "", "", "", fmt.Errorf("marshal starter config: %w", mErr)
+		}
+		if wErr := os.WriteFile(configPath, b, 0o644); wErr != nil {
+			return "", "", "", fmt.Errorf("write starter config %q: %w", configPath, wErr)
+		}
+	} else if statErr == nil {
+		// Ensure relative persist_path in migrated/existing configs points to ProgramData\Tomapedidos\data\jobs.db.
+		if raw, rErr := os.ReadFile(configPath); rErr == nil {
+			var parsed config.Config
+			if jErr := json.Unmarshal(raw, &parsed); jErr == nil {
+				if parsed.Queue.PersistPath == "" || parsed.Queue.PersistPath == "./data/jobs.db" || parsed.Queue.PersistPath == `.\data\jobs.db` {
+					parsed.Queue.PersistPath = jobsPath
+					if b, mErr := json.MarshalIndent(parsed, "", "  "); mErr == nil {
+						_ = os.WriteFile(configPath, b, 0o644)
+					}
+				}
+			}
+		}
+	}
+	return configDir, dataDir, logsDir, nil
+}
+
+// grantDataDirPermissions grants full control to the virtual service account
+// and modify access to built-in Users via well-known SID *S-1-5-32-545 so it
+// works on Spanish ("Usuarios"), English ("Users"), or any Windows locale.
+func (m *scmManager) grantDataDirPermissions(dirs ...string) error {
+	serviceGrant := m.virtualAccountName() + ":(OI)(CI)F"
+	usersSIDGrant := "*S-1-5-32-545:(OI)(CI)M"
+	sysRoot := os.Getenv("SystemRoot")
+	if sysRoot == "" {
+		sysRoot = `C:\Windows`
+	}
+	icaclsPath := filepath.Join(sysRoot, "System32", "icacls.exe")
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		cmd := exec.Command(icaclsPath, dir, "/grant", serviceGrant, usersSIDGrant)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("icacls %q failed: %w (%s)", dir, err, strings.TrimSpace(string(out)))
+		}
 	}
 	return nil
 }

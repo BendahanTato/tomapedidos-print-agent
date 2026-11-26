@@ -74,7 +74,9 @@ func NewRegistry() *Registry {
 func (r *Registry) Add(p Printer, meta Info) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	meta.Status = StatusOffline
+	if meta.Status == "" {
+		meta.Status = StatusOffline
+	}
 	meta.LastSeenAt = time.Now()
 	r.printers[p.ID()] = p
 	r.info[p.ID()] = meta

@@ -124,6 +124,9 @@ func runInitConfig(args []string) {
 	path := fs.String("config", defaultConfigPath, "path to write the starter config")
 	_ = fs.Parse(args)
 	cfg := config.Default()
+	if filepath.IsAbs(*path) && strings.EqualFold(filepath.Base(filepath.Dir(*path)), "config") {
+		cfg.Queue.PersistPath = filepath.Join(filepath.Dir(filepath.Dir(*path)), "data", "jobs.db")
+	}
 	if err := os.MkdirAll(filepath.Dir(*path), 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "create dir: %v\n", err)
 		os.Exit(1)
@@ -144,15 +147,140 @@ func runInitConfig(args []string) {
 	fmt.Printf("wrote starter config to %s\n", *path)
 }
 
-func runDoctor(_ []string) {
+func runDoctor(args []string) {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	configPath := fs.String("config", "", "path to config JSON")
+	_ = fs.Parse(args)
+
 	fmt.Printf("print-agent %s\n", version.String())
 	fmt.Printf("go:       %s\n", runtime.Version())
 	fmt.Printf("platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	if exe, err := os.Executable(); err == nil {
+		fmt.Printf("binary:   %s\n", exe)
+	}
 	if hasLoopback() {
 		fmt.Println("loopback: ok")
 	} else {
-		fmt.Println("loopback: FAILED to bind 127.0.0.1 (very unusual)")
+		fmt.Println("loopback: FAILED to bind 127.0.0.1 (check firewall/antivirus)")
 	}
+
+	svcState, svcErr := service.New().Status()
+	if svcErr != nil {
+		fmt.Printf("service:  %s (%v)\n", svcState, svcErr)
+	} else {
+		fmt.Printf("service:  %s (%s)\n", svcState, service.Label)
+	}
+
+	cfgFile := *configPath
+	if cfgFile == "" {
+		cfgFile = defaultDoctorConfigPath()
+	}
+	listenPort := 4510
+	logFile := defaultWindowsLogPath()
+	cfgStore, err := config.Load(cfgFile, false)
+	if err != nil {
+		fmt.Printf("config:   ERROR (%s): %v\n", cfgFile, err)
+	} else {
+		cfg := cfgStore.Get()
+		listenPort = cfg.Port
+		if cfg.LogFile != "" {
+			logFile = cfg.LogFile
+		}
+		fmt.Printf("config:   ok (%s, %d printer(s))\n", cfgFile, len(cfg.Printers))
+		for _, p := range cfg.Printers {
+			target := p.SystemName
+			if p.Type == "network" {
+				target = fmt.Sprintf("%s:%d", p.Host, p.Port)
+			} else if p.Type == "file" {
+				target = p.FilePath
+			}
+			fmt.Printf("  - [%s] type=%s target=%q\n", p.ID, p.Type, target)
+		}
+	}
+
+	healthURL := fmt.Sprintf("http://127.0.0.1:%d/health", listenPort)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(healthURL)
+	if err != nil {
+		fmt.Printf("health:   UNREACHABLE (%s: %v)\n", healthURL, err)
+	} else {
+		defer resp.Body.Close()
+		var hr server.HealthResponse
+		if decErr := json.NewDecoder(resp.Body).Decode(&hr); decErr != nil {
+			fmt.Printf("health:   HTTP %d (invalid JSON: %v)\n", resp.StatusCode, decErr)
+		} else {
+			fmt.Printf("health:   ok (version=%s uptime=%ds)\n", hr.Version, hr.UptimeSec)
+			for _, p := range hr.Printers {
+				errSuffix := ""
+				if p.LastError != "" {
+					errSuffix = " error=" + p.LastError
+				}
+				fmt.Printf("  - live [%s] status=%s queue=%d%s\n", p.ID, p.Status, p.QueueDepth, errSuffix)
+			}
+		}
+	}
+
+	detCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	detected, detErr := server.DetectSystemPrinters(detCtx)
+	if detErr != nil {
+		fmt.Printf("spooler:  ERROR (%v)\n", detErr)
+	} else if len(detected) == 0 {
+		fmt.Println("spooler:  0 system printers detected")
+	} else {
+		fmt.Printf("spooler:  %d system printer(s) detected\n", len(detected))
+		for _, dp := range detected {
+			fmt.Printf("  - %q (driver=%q suggested=%s)\n", dp.Name, dp.MakeAndModel, dp.SuggestedType)
+		}
+	}
+
+	if logFile != "" {
+		if data, readErr := os.ReadFile(logFile); readErr == nil {
+			lines := strings.Split(strings.TrimRight(string(data), "\r\n"), "\n")
+			start := 0
+			if len(lines) > 10 {
+				start = len(lines) - 10
+			}
+			fmt.Printf("log tail (%s):\n", logFile)
+			for _, l := range lines[start:] {
+				if strings.TrimSpace(l) != "" {
+					fmt.Printf("  %s\n", l)
+				}
+			}
+		}
+	}
+}
+
+func defaultDoctorConfigPath() string {
+	if _, err := os.Stat(defaultConfigPath); err == nil {
+		return defaultConfigPath
+	}
+	if runtime.GOOS == "windows" {
+		pd := windowsProgramData()
+		candidate := filepath.Join(pd, "Tomapedidos", "config", "printers.json")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return defaultConfigPath
+}
+
+func defaultWindowsLogPath() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	return filepath.Join(windowsProgramData(), "Tomapedidos", "logs", "print-agent.log")
+}
+
+func windowsProgramData() string {
+	pd := os.Getenv("ProgramData")
+	if pd == "" {
+		pd = os.Getenv("PROGRAMDATA")
+	}
+	if pd == "" {
+		pd = `C:\ProgramData`
+	}
+	return pd
 }
 
 func hasLoopback() bool {
@@ -199,14 +327,7 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 	isWindowsService, _ := service.IsWindowsService()
 	logPath := ""
 	if isWindowsService {
-		programData := os.Getenv("ProgramData")
-		if programData == "" {
-			programData = os.Getenv("PROGRAMDATA")
-		}
-		if programData == "" {
-			programData = `C:\ProgramData`
-		}
-		logPath = filepath.Join(programData, "Tomapedidos", "logs", "print-agent.log")
+		logPath = defaultWindowsLogPath()
 	}
 	log, logCloser := openAgentLogger(level, logPath)
 	defer func() {
@@ -275,7 +396,12 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 
 	bus := eventbus.New()
 
-	q, err := queue.New(cfg.Queue.MaxRetries, cfg.Queue.DedupWindow, cfg.Queue.PersistPath, log, bus)
+	persistPath := cfg.Queue.PersistPath
+	if isWindowsService && (persistPath == "./data/jobs.db" || persistPath == `.\data\jobs.db`) {
+		// Windows services start in System32 where relative ./data/jobs.db fails.
+		persistPath = filepath.Join(windowsProgramData(), "Tomapedidos", "data", "jobs.db")
+	}
+	q, err := queue.New(cfg.Queue.MaxRetries, cfg.Queue.DedupWindow, persistPath, log, bus)
 	if err != nil {
 		log.Error("queue init failed", slog.String("error", err.Error()))
 		fmt.Fprintf(stderr, "queue init failed: %v\n", err)
@@ -290,8 +416,10 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 		reg.SetQueueDepth(id, 0)
 	}
 
-	// Worker pool drains the queue.
+	// Worker pool drains the queue. Start synchronously before serving HTTP so
+	// PUT /config hot-reloads always attach to the agent's root context.
 	pool := queue.NewPool(q, reg, cfg.Queue, log)
+	pool.Start(ctx)
 	go pool.Run(ctx)
 
 	// Heartbeat keeps Status fresh.
@@ -359,10 +487,18 @@ func openAgentLogger(level slog.Level, path string) (*slog.Logger, io.Closer) {
 
 func runServiceInstall(args []string) {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
-	configPath := fs.String("config", defaultConfigPath, "path to config JSON")
+	configPath := fs.String("config", "", "path to config JSON")
 	_ = fs.Parse(args)
+	cfgFile := *configPath
+	if cfgFile == "" {
+		if runtime.GOOS == "windows" {
+			cfgFile = filepath.Join(windowsProgramData(), "Tomapedidos", "config", "printers.json")
+		} else {
+			cfgFile = defaultConfigPath
+		}
+	}
 	exe, _ := os.Executable()
-	if err := service.New().Install(exe, *configPath); err != nil {
+	if err := service.New().Install(exe, cfgFile); err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		os.Exit(1)
 	}

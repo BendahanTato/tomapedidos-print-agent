@@ -8,25 +8,24 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 var (
-	gdi32               = syscall.NewLazyDLL("gdi32.dll")
-	procCreateDCW       = gdi32.NewProc("CreateDCW")
-	procDeleteDC        = gdi32.NewProc("DeleteDC")
-	procStartDocW       = gdi32.NewProc("StartDocW")
-	procEndDoc          = gdi32.NewProc("EndDoc")
-	procStartPage       = gdi32.NewProc("StartPage")
-	procEndPage         = gdi32.NewProc("EndPage")
-	procCreateFontW     = gdi32.NewProc("CreateFontIndirectW")
-	procSelectObject    = gdi32.NewProc("SelectObject")
-	procDeleteObject    = gdi32.NewProc("DeleteObject")
-	procTextOutW        = gdi32.NewProc("TextOutW")
-	procGetDeviceCaps   = gdi32.NewProc("GetDeviceCaps")
+	gdi32             = windows.NewLazySystemDLL("gdi32.dll")
+	procCreateDCW     = gdi32.NewProc("CreateDCW")
+	procDeleteDC      = gdi32.NewProc("DeleteDC")
+	procStartDocW     = gdi32.NewProc("StartDocW")
+	procEndDoc        = gdi32.NewProc("EndDoc")
+	procStartPage     = gdi32.NewProc("StartPage")
+	procEndPage       = gdi32.NewProc("EndPage")
+	procCreateFontW   = gdi32.NewProc("CreateFontIndirectW")
+	procSelectObject  = gdi32.NewProc("SelectObject")
+	procDeleteObject  = gdi32.NewProc("DeleteObject")
+	procTextOutW      = gdi32.NewProc("TextOutW")
+	procGetDeviceCaps = gdi32.NewProc("GetDeviceCaps")
 )
 
 const (
@@ -92,10 +91,28 @@ func (p *GDIPrinter) Status() (Status, string) {
 }
 
 func (p *GDIPrinter) Ping(_ context.Context) error {
-	return nil
+	return checkSpoolerPrinter(p.systemName)
 }
 
 func (p *GDIPrinter) Open(_ context.Context) error {
+	return checkSpoolerPrinter(p.systemName)
+}
+
+func checkSpoolerPrinter(systemName string) error {
+	name, err := windows.UTF16PtrFromString(systemName)
+	if err != nil {
+		return fmt.Errorf("invalid printer name %q: %w", systemName, err)
+	}
+	var handle windows.Handle
+	ret, _, callErr := procOpenPrinter.Call(
+		uintptr(unsafe.Pointer(name)),
+		uintptr(unsafe.Pointer(&handle)),
+		0,
+	)
+	if ret == 0 {
+		return fmt.Errorf("printer %q not found in spooler: %w", systemName, callErr)
+	}
+	procClosePrinter.Call(uintptr(handle))
 	return nil
 }
 
@@ -108,16 +125,19 @@ func (p *GDIPrinter) Write(_ context.Context, b []byte) error {
 	defer p.mu.Unlock()
 
 	driver, _ := windows.UTF16PtrFromString("WINSPOOL")
-	device, _ := windows.UTF16PtrFromString(p.systemName)
+	device, err := windows.UTF16PtrFromString(p.systemName)
+	if err != nil {
+		return fmt.Errorf("invalid printer name %q: %w", p.systemName, err)
+	}
 
-	hdc, _, _ := procCreateDCW.Call(
+	hdc, _, callErr := procCreateDCW.Call(
 		uintptr(unsafe.Pointer(driver)),
 		uintptr(unsafe.Pointer(device)),
 		0,
 		0,
 	)
 	if hdc == 0 {
-		return fmt.Errorf("CreateDCW failed for printer %s", p.systemName)
+		return fmt.Errorf("CreateDCW(%s): %w", p.systemName, callErr)
 	}
 	defer procDeleteDC.Call(hdc)
 
@@ -127,15 +147,15 @@ func (p *GDIPrinter) Write(_ context.Context, b []byte) error {
 		LpszDocName: docName,
 	}
 
-	ret, _, _ := procStartDocW.Call(hdc, uintptr(unsafe.Pointer(&di)))
+	ret, _, callErr := procStartDocW.Call(hdc, uintptr(unsafe.Pointer(&di)))
 	if int32(ret) <= 0 {
-		return fmt.Errorf("StartDocW failed")
+		return fmt.Errorf("StartDocW(%s): %w", p.systemName, callErr)
 	}
 	defer procEndDoc.Call(hdc)
 
-	ret, _, _ = procStartPage.Call(hdc)
+	ret, _, callErr = procStartPage.Call(hdc)
 	if int32(ret) <= 0 {
-		return fmt.Errorf("StartPage failed")
+		return fmt.Errorf("StartPage(%s): %w", p.systemName, callErr)
 	}
 
 	dpiY, _, _ := procGetDeviceCaps.Call(hdc, LOGPIXELSY)

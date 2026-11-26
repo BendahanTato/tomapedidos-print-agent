@@ -125,38 +125,127 @@ func (w *Worker) getBackoff(attempt int) time.Duration {
 	return d
 }
 
-// Pool spawns one Worker per registered printer and runs them until ctx
-// is cancelled.
+// Pool spawns one Worker per registered printer and keeps them aligned
+// with hot-reloaded config changes until the agent's root ctx is cancelled.
 type Pool struct {
 	queue    *Queue
 	registry *printer.Registry
 	cfg      config.Queue
 	log      *slog.Logger
+
+	mu      sync.Mutex
+	ctx     context.Context
+	workers map[string]context.CancelFunc
+	wg      sync.WaitGroup
 }
 
 // NewPool returns a worker pool.
 func NewPool(q *Queue, reg *printer.Registry, cfg config.Queue, log *slog.Logger) *Pool {
-	return &Pool{queue: q, registry: reg, cfg: cfg, log: log}
-}
-
-// Run starts one Worker per registered printer. It returns when ctx is
-// cancelled. New printers added at runtime are NOT picked up by this
-// call; that is done by the supervisor loop in main which calls Add().
-func (p *Pool) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-	for id := range p.registry.Printers() {
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			NewWorker(id, p.queue, p.registry, p.cfg, p.log).Run(ctx)
-		}(id)
+	return &Pool{
+		queue:    q,
+		registry: reg,
+		cfg:      cfg,
+		log:      log,
+		ctx:      context.Background(),
+		workers:  make(map[string]context.CancelFunc),
 	}
-	wg.Wait()
 }
 
-// Add spawns a new Worker for printerID. The caller must have already
-// registered the printer with the registry. Intended for hot-reload
-// scenarios (e.g. config reload adding a new printer).
-func (p *Pool) Add(ctx context.Context, printerID string) {
-	go NewWorker(printerID, p.queue, p.registry, p.cfg, p.log).Run(ctx)
+// Start binds the pool to the agent's root context and spawns workers for
+// all currently registered printers before returning. Safe to call before
+// serving HTTP so hot-reload calls never race with startup.
+func (p *Pool) Start(ctx context.Context) {
+	p.mu.Lock()
+	p.ctx = ctx
+	p.mu.Unlock()
+	p.Sync()
+}
+
+// Wait blocks until all workers have exited.
+func (p *Pool) Wait() {
+	p.wg.Wait()
+}
+
+// Run starts workers for registered printers and blocks until ctx is
+// cancelled and all workers exit.
+func (p *Pool) Run(ctx context.Context) {
+	p.Start(ctx)
+	<-ctx.Done()
+	p.mu.Lock()
+	for id, cancel := range p.workers {
+		cancel()
+		delete(p.workers, id)
+	}
+	p.mu.Unlock()
+	p.wg.Wait()
+}
+
+// Sync reconciles active workers with the printers currently in the registry.
+// Workers for removed printers are stopped; workers for newly added printers
+// are spawned under the pool's long-lived context (never a request context).
+func (p *Pool) Sync() {
+	registered := p.registry.Printers()
+
+	p.mu.Lock()
+	baseCtx := p.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	for id, cancel := range p.workers {
+		if _, ok := registered[id]; !ok {
+			cancel()
+			delete(p.workers, id)
+		}
+	}
+	if baseCtx.Err() == nil {
+		for id := range registered {
+			if _, running := p.workers[id]; running {
+				continue
+			}
+			wCtx, cancel := context.WithCancel(baseCtx)
+			p.workers[id] = cancel
+			p.wg.Add(1)
+			go func(printerID string, ctx context.Context) {
+				defer p.wg.Done()
+				NewWorker(printerID, p.queue, p.registry, p.cfg, p.log).Run(ctx)
+			}(id, wCtx)
+		}
+	}
+	p.mu.Unlock()
+
+	if p.queue != nil {
+		p.queue.Wake()
+	}
+}
+
+// Add ensures a Worker is running for printerID under the pool's root context.
+func (p *Pool) Add(printerID string) {
+	p.mu.Lock()
+	if _, running := p.workers[printerID]; running {
+		p.mu.Unlock()
+		if p.queue != nil {
+			p.queue.Wake()
+		}
+		return
+	}
+	baseCtx := p.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	if baseCtx.Err() != nil {
+		p.mu.Unlock()
+		return
+	}
+	wCtx, cancel := context.WithCancel(baseCtx)
+	p.workers[printerID] = cancel
+	p.wg.Add(1)
+	p.mu.Unlock()
+
+	go func() {
+		defer p.wg.Done()
+		NewWorker(printerID, p.queue, p.registry, p.cfg, p.log).Run(wCtx)
+	}()
+	if p.queue != nil {
+		p.queue.Wake()
+	}
 }

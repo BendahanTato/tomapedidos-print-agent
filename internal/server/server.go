@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -54,10 +55,16 @@ func init() {
 // including the tomaPedidos SaaS loaded from vercel.app.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+		if origin := r.Header.Get("Origin"); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		if r.Header.Get("Access-Control-Request-Private-Network") == "true" {
+			w.Header().Set("Access-Control-Allow-Private-Network", "true")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -216,17 +223,22 @@ func configPutHandler(d Deps) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
 			return
 		}
-		// Reconcile the registry with the new config so newly added
-		// printers are available immediately without a restart.
-		added := printer.SyncFromConfig(r.Context(), d.Registry, d.Config.Get(), d.Log)
-		for _, id := range added {
-			if d.Pool != nil {
-				d.Pool.Add(r.Context(), id)
-			}
+		// Reconcile the registry and worker pool using a detached context so
+		// workers outlive the HTTP request and edited printers are reopened.
+		syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		printer.SyncFromConfig(syncCtx, d.Registry, d.Config.Get(), d.Log)
+		if d.Pool != nil {
+			d.Pool.Sync()
 		}
 		d.Log.Info("config replaced via panel")
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
+}
+
+// DetectSystemPrinters scans the OS spooler for installed printers.
+func DetectSystemPrinters(ctx context.Context) ([]DetectedPrinter, error) {
+	return detectSystemPrinters(ctx)
 }
 
 // detectPrintersHandler scans the OS for installed printers and

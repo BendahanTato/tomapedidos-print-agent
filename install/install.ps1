@@ -1,10 +1,15 @@
-# Quick-install script for Windows.
+﻿# Quick-install script for Windows.
 # Download the binary from GitHub Releases and install as a Windows service.
 param(
   [string]$Version = "latest"
 )
 
 $ErrorActionPreference = "Stop"
+
+$currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  throw "Este instalador requiere permisos de Administrador. Abrí PowerShell como Administrador o usá TomaPedidos-PrintAgent-Setup.exe."
+}
 
 # Ensure TLS 1.2 is enabled for GitHub downloads on older PowerShell versions
 try {
@@ -236,9 +241,11 @@ try {
 
   # The virtual service account is resolvable after the service is registered.
   # Grant directory-level rights so SQLite can create its WAL/SHM sidecars.
+  # Use well-known SID *S-1-5-32-545 instead of "Users" so Spanish/localized Windows ("Usuarios") works.
   $serviceGrant = "${serviceAccount}:(OI)(CI)F"
+  $usersSidGrant = "*S-1-5-32-545:(OI)(CI)M"
   foreach ($directory in @($configDir, $dataDir, $logsDir)) {
-    & icacls.exe $directory /grant $serviceGrant "Users:(OI)(CI)M"
+    & icacls.exe $directory /grant $serviceGrant $usersSidGrant
     $aclExit = $LASTEXITCODE
     if ($aclExit -ne 0) {
       throw "Could not set permissions on $directory (icacls.exe exit code $aclExit)."

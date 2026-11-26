@@ -94,13 +94,67 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      - name: build Windows Setup.exe installer (Inno Setup)
+        if: matrix.target.goos == 'windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+          }
+          if (-not (Test-Path $iscc)) {
+            throw "ISCC.exe not found after installing Inno Setup"
+          }
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          if ([string]::IsNullOrWhiteSpace($ver) -or $ver -eq "main") {
+            $ver = "0.0.0"
+          }
+          $arch = "${{ matrix.target.goarch }}"
+          $binSrc = Join-Path $PWD "print-agent-windows-$arch.exe"
+          $outBase = "TomaPedidos-PrintAgent-Setup-windows-$arch"
+          $outDir = Join-Path $PWD "installer-out"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          & $iscc `
+            "/DMyAppVersion=$ver" `
+            "/DMyAppArch=$arch" `
+            "/DMyBinarySource=$binSrc" `
+            "/DMyOutputDir=$outDir" `
+            "/DMyOutputBaseFilename=$outBase" `
+            "install/windows/setup.iss"
+          if ($LASTEXITCODE -ne 0) {
+            throw "ISCC failed with exit code $LASTEXITCODE"
+          }
+      - name: sign Windows Setup.exe with Azure Trusted Signing
+        if: ${{ matrix.target.goos == 'windows' && env.SIGNING_ENABLED == 'true' && env.SIGNING_SECRETS_PRESENT == 'true' && env.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME != '' }}
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}/installer-out
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      - name: stage Windows Setup.exe
+        if: matrix.target.goos == 'windows'
+        shell: pwsh
+        run: Move-Item -Force "installer-out/TomaPedidos-PrintAgent-Setup-windows-${{ matrix.target.goarch }}.exe" .
       - uses: actions/upload-artifact@v4
         with:
           name: "print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}"
-          path: "print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}${{ matrix.target.goos == 'windows' && '.exe' || '' }}"
+          path: |
+            print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}${{ matrix.target.goos == 'windows' && '.exe' || '' }}
+            ${{ matrix.target.goos == 'windows' && format('TomaPedidos-PrintAgent-Setup-windows-{0}.exe', matrix.target.goarch) || '' }}
+          if-no-files-found: error
 
   release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -118,5 +172,6 @@ jobs:
         with:
           files: |
             dist/print-agent-*
+            dist/TomaPedidos-PrintAgent-Setup-*.exe
             dist/SHA256SUMS
           generate_release_notes: true

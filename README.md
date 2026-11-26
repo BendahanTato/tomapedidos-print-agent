@@ -37,14 +37,25 @@ del SO) o un archivo de debug.
 
 ## Instalación rápida
 
+### Windows (Recomendado — Instalador doble clic)
+1. Descargar `TomaPedidos-PrintAgent-Setup-windows-amd64.exe` desde el último [GitHub Release](https://github.com/BendahanTato/tomapedidos-print-agent/releases/latest).
+2. Ejecutar con doble clic (si aparece SmartScreen: *Más información → Ejecutar de todas formas*).
+3. Al finalizar se abrirá `http://127.0.0.1:4510` (PIN por defecto: `0000`) para elegir la impresora y enviar un ticket de prueba.
+
+Para diagnosticar cualquier problema en Windows:
+```powershell
+& "$env:ProgramFiles\Tomapedidos\PrintAgent\print-agent.exe" doctor
+```
+
+### Alternativa por consola
 ```bash
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.sh | bash
 ```
 
 ```powershell
-# Windows PowerShell (Run as Administrator)
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.ps1 | Invoke-Expression
+# Windows PowerShell (Ejecutar como Administrador)
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/BendahanTato/tomapedidos-print-agent/main/install/install.ps1 -UseBasicParsing | Invoke-Expression
 ```
 
 ## Compilar

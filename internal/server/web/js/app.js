@@ -54,7 +54,8 @@
     const pin = $('#pin-input').value;
     try {
       const body = { pin: pin };
-      await fetch(API_BASE + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await fetch(API_BASE + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error('bad_pin');
       loggedIn = true;
       $('#login-screen').classList.add('hidden');
       $('#main-screen').classList.remove('hidden');
@@ -462,7 +463,8 @@
         var cls = j.status === 'failed' ? 'red' : j.status === 'printed' ? 'green' : j.status === 'cancelled' ? 'amber' : '';
         var ca = j.created_at ? new Date(j.created_at).toLocaleString() : '—';
         var previewBtn = j.preview ? '<button class="btn btn-sm preview-btn" data-id="' + esc(j.id) + '">Ver</button>' : '';
-        return '<tr class="job-row" data-id="' + esc(j.id) + '" style="cursor:pointer"><td class="text-mono" style="max-width:100px;overflow:hidden;text-overflow:ellipsis" title="' + esc(j.id) + '">' + esc(j.id.slice(0, 12)) + '…</td><td>' + esc(j.printer_id) + '</td><td><span class="badge badge-' + cls + '">' + esc(j.status) + '</span></td><td>' + (j.bytes || 0) + '</td><td>' + (j.attempts || 0) + '/' + (j.max_attempts || 1) + '</td><td>' + ca + '</td><td><div class="flex gap-1">' + previewBtn + '<button class="btn btn-sm reprint-btn" data-id="' + esc(j.id) + '">Reprint</button><button class="btn btn-sm btn-danger cancel-btn" data-id="' + esc(j.id) + '">Cancel</button></div></td></tr>';
+        var errLine = j.last_error ? '<div class="text-muted" style="color:#dc2626;font-size:12px;margin-top:2px">' + esc(j.last_error.slice(0, 140)) + '</div>' : '';
+        return '<tr class="job-row" data-id="' + esc(j.id) + '" style="cursor:pointer"><td class="text-mono" style="max-width:100px;overflow:hidden;text-overflow:ellipsis" title="' + esc(j.id) + '">' + esc(j.id.slice(0, 12)) + '…</td><td>' + esc(j.printer_id) + '</td><td><span class="badge badge-' + cls + '">' + esc(j.status) + '</span>' + errLine + '</td><td>' + (j.bytes || 0) + '</td><td>' + (j.attempts || 0) + '/' + (j.max_attempts || 1) + '</td><td>' + ca + '</td><td><div class="flex gap-1">' + previewBtn + '<button class="btn btn-sm reprint-btn" data-id="' + esc(j.id) + '">Reprint</button><button class="btn btn-sm btn-danger cancel-btn" data-id="' + esc(j.id) + '">Cancel</button></div></td></tr>';
       }).join('') + '</tbody></table></div>';
     }
 

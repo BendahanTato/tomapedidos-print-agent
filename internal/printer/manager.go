@@ -48,7 +48,18 @@ func NewFromConfig(ctx context.Context, p config.Printer) (Printer, Info, error)
 		return np, info, nil
 	case "usb-gdi":
 		pr, err := NewGDI(p.ID, p.SystemName)
-		return pr, info, err
+		if err != nil {
+			info.Status = StatusError
+			info.LastError = err.Error()
+			return pr, info, err
+		}
+		if err := pr.Open(ctx); err != nil {
+			info.Status = StatusOffline
+			info.LastError = err.Error()
+			return pr, info, nil
+		}
+		info.Status = StatusOnline
+		return pr, info, nil
 	case "file":
 		fp := NewFile(p.ID, p.FilePath, 1024*1024)
 		if err := fp.Open(ctx); err != nil {
@@ -132,14 +143,15 @@ func Heartbeat(ctx context.Context, reg *Registry, log *slog.Logger, every time.
 }
 
 // SyncFromConfig reconciles the registry with the provided config.
-// New printers are opened and registered; printers removed from the
-// config are closed and removed from the registry. Used by PUT /config
-// so the operator can add/remove printers without restarting the agent.
-// It returns a list of printer IDs that were newly added.
+// New printers are opened and registered; modified printers are reopened
+// and replaced in place; printers removed from the config are closed and
+// removed from the registry. Used by PUT /config so the operator can
+// add, edit, or remove printers without restarting the agent.
+// It returns a list of printer IDs that were newly added or updated.
 func SyncFromConfig(ctx context.Context, reg *Registry, cfg config.Config, log *slog.Logger) []string {
-	// Collect desired IDs from the config.
 	want := make(map[string]config.Printer, len(cfg.Printers))
 	for _, p := range cfg.Printers {
+		p.Type = config.NormalizeType(p.Type)
 		want[p.ID] = p
 	}
 	// Remove printers that are no longer in the config.
@@ -154,11 +166,16 @@ func SyncFromConfig(ctx context.Context, reg *Registry, cfg config.Config, log *
 			}
 		}
 	}
-	// Add printers that are new in the config.
-	var added []string
+	// Add new printers and replace existing ones whose settings changed.
+	var changed []string
 	for id, p := range want {
-		if _, ok := reg.Get(id); ok {
-			continue // already registered
+		if existing, ok := reg.Get(id); ok {
+			if !printerConfigChanged(existing, p) {
+				continue
+			}
+			if oldPr, ok := reg.Printers()[id]; ok {
+				_ = oldPr.Close()
+			}
 		}
 		pr, info, err := NewFromConfig(ctx, p)
 		if err != nil && log != nil {
@@ -169,12 +186,30 @@ func SyncFromConfig(ctx context.Context, reg *Registry, cfg config.Config, log *
 		}
 		if pr != nil {
 			reg.Add(pr, info)
-			added = append(added, id)
+			changed = append(changed, id)
 			if log != nil {
-				log.Info("printer added by config reload", "printer", id)
+				log.Info("printer synced by config reload", "printer", id, "type", info.Type, "status", info.Status)
 			}
 		}
 	}
-	return added
+	return changed
+}
+
+func printerConfigChanged(cur Info, next config.Printer) bool {
+	if cur.Name != next.Name ||
+		cur.Host != next.Host ||
+		cur.Port != next.Port ||
+		cur.SystemName != next.SystemName ||
+		cur.FilePath != next.FilePath ||
+		cur.CodePage != next.CodePage ||
+		cur.CharsPerLine != next.CharsPerLine ||
+		cur.Cut != next.Cut ||
+		cur.ItemDoubleHeight != next.ItemDoubleHeight {
+		return true
+	}
+	if next.Type != "" && cur.Type != next.Type {
+		return true
+	}
+	return false
 }
 

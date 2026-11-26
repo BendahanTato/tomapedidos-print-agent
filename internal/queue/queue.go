@@ -198,7 +198,8 @@ func (q *Queue) Submit(printerID string, jobID string, payload []byte, preview s
 	// In-memory dedup (fast path).
 	if prev, ok := q.byID[jobID]; ok {
 		if time.Since(prev.CreatedAt) < q.dedupTTL {
-			return prev, ErrDuplicate
+			cp := *prev
+			return &cp, ErrDuplicate
 		}
 	}
 
@@ -208,7 +209,8 @@ func (q *Queue) Submit(printerID string, jobID string, payload []byte, preview s
 		if dup, _ := q.st.isDuplicate(jobID, q.dedupTTL); dup {
 			// Try to get from in-memory first, then DB.
 			if prev, ok := q.byID[jobID]; ok {
-				return prev, ErrDuplicate
+				cp := *prev
+				return &cp, ErrDuplicate
 			}
 			if prev, ok := q.st.loadByID(jobID); ok {
 				return prev, ErrDuplicate
@@ -246,7 +248,8 @@ func (q *Queue) Submit(printerID string, jobID string, payload []byte, preview s
 	default:
 	}
 	q.emit("job.queued", j, "")
-	return j, nil
+	cp := *j
+	return &cp, nil
 }
 
 // Pop returns the next job for printerID, or nil if the queue is empty.
@@ -315,13 +318,15 @@ func (q *Queue) Cancel(jobID string) (*Job, bool) {
 		return nil, false
 	}
 	if j.Status == StatusPrinted || j.Status == StatusFailed || j.Status == StatusCancelled {
-		return j, false
+		cp := *j
+		return &cp, false
 	}
 	j.Status = StatusCancelled
 	j.FinishedAt = time.Now()
 	q.persistUpdateLocked(j)
 	q.emit("job.cancelled", j, "")
-	return j, true
+	cp := *j
+	return &cp, true
 }
 
 // Get returns a snapshot of a job by ID. It checks the in-memory map
