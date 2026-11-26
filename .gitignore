@@ -25,3 +25,4 @@ coverage.html
 # Go workspace files
 go.work
 go.work.sum
+dist-test/
