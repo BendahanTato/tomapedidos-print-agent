@@ -13,6 +13,7 @@
     <form id="login-form" class="login-form">
       <h1>Print Agent</h1>
       <p class="login-sub">Panel local</p>
+      <p id="setup-pin-hint" class="login-sub hidden" style="color:#9a3412;background:#fff7ed;padding:.45rem .6rem;border-radius:8px;margin-bottom:1rem">Si es tu primera instalacion, el PIN inicial es <strong>1234</strong></p>
       <input type="password" id="pin-input" placeholder="PIN" maxlength="8" autofocus required>
       <button type="submit">Ingresar</button>
       <p id="login-error" class="login-error hidden"></p>
@@ -27,6 +28,7 @@
       </div>
       <nav class="sidebar-nav">
         <button data-route="dashboard" class="nav-btn active">Dashboard</button>
+        <button data-route="setup" class="nav-btn">Asistente</button>
         <button data-route="printers" class="nav-btn">Impresoras</button>
         <button data-route="jobs" class="nav-btn">Jobs</button>
         <button data-route="settings" class="nav-btn">Settings</button>
@@ -39,6 +41,7 @@
 
     <section class="content">
       <div id="view-dashboard" class="view"></div>
+      <div id="view-setup" class="view hidden"></div>
       <div id="view-printers" class="view hidden"></div>
       <div id="view-jobs" class="view hidden"></div>
       <div id="view-settings" class="view hidden"></div>

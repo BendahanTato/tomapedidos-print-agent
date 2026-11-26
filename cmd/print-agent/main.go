@@ -39,6 +39,7 @@ import (
 	"github.com/tomapedidos/print-agent/internal/logging"
 	"github.com/tomapedidos/print-agent/internal/printer"
 	"github.com/tomapedidos/print-agent/internal/queue"
+	"github.com/tomapedidos/print-agent/internal/reporter"
 	"github.com/tomapedidos/print-agent/internal/server"
 	"github.com/tomapedidos/print-agent/internal/service"
 	"github.com/tomapedidos/print-agent/internal/version"
@@ -294,8 +295,13 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 	pool := queue.NewPool(q, reg, cfg.Queue, log)
 	go pool.Run(ctx)
 
+	startedAt := time.Now()
+
 	// Heartbeat keeps Status fresh.
 	go printer.Heartbeat(ctx, reg, log, 10*time.Second, bus)
+
+	// Lightweight remote reporter (no-op unless report_url is configured).
+	go reporter.Run(ctx, cfgStore, reg, bus, startedAt, log)
 
 	mux := server.New(server.Deps{
 		Config:    cfgStore,
@@ -304,7 +310,7 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 		Pool:      pool,
 		EventBus:  bus,
 		Log:       log,
-		StartedAt: time.Now(),
+		StartedAt: startedAt,
 	})
 
 	addr := fmt.Sprintf("%s:%d", listenHost, listenPort)

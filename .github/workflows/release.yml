@@ -78,6 +78,26 @@ jobs:
           CGO_ENABLED=0 GOOS="${OS}" GOARCH="${ARCH}" \
             go build -trimpath -ldflags "${LDFLAGS}" -o "${NAME}" ./cmd/print-agent
           echo "NAME=${NAME}" >> "$GITHUB_ENV"
+      - name: build Windows Inno Setup installer
+        if: matrix.target.goos == 'windows'
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+          if (-not $iscc) {
+            $candidate = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            if (Test-Path $candidate) { $iscc = $candidate }
+          }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress | Out-Null
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          $ver = "${{ github.ref_name }}".TrimStart("v")
+          if (-not $ver) { $ver = "0.4.0" }
+          $arch = "${{ matrix.target.goarch }}"
+          $exePath = Resolve-Path $env:NAME
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & $iscc "/DAppVersion=$ver" "/DAppArch=$arch" "/DAppExe=$exePath" install\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: sign Windows executable with Azure Trusted Signing
         if: ${{ matrix.target.goos == 'windows' && env.SIGNING_ENABLED == 'true' && env.SIGNING_SECRETS_PRESENT == 'true' && env.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME != '' }}
         uses: azure/trusted-signing-action@v0
@@ -97,7 +117,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: "print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}"
-          path: "print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}${{ matrix.target.goos == 'windows' && '.exe' || '' }}"
+          if-no-files-found: ignore
+          path: |
+            print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}${{ matrix.target.goos == 'windows' && '.exe' || '' }}
+            dist/print-agent-windows-${{ matrix.target.goarch }}-setup.exe
 
   release:
     needs: build
@@ -118,5 +141,6 @@ jobs:
         with:
           files: |
             dist/print-agent-*
+            dist/SHA256SUMS
             dist/SHA256SUMS
           generate_release_notes: true

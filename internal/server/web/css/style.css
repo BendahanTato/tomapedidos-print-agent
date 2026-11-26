@@ -114,3 +114,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .flex { display: flex; }
 .flex-wrap { flex-wrap: wrap; }
 .overflow-x { overflow-x: auto; }
+
+/* Friendly setup wizard */
+.setup-hero { background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%); border: 1.5px solid #fed7aa; border-radius: 14px; padding: 1.5rem; margin-bottom: 1.25rem; }
+.setup-hero h2 { font-size: 1.25rem; font-weight: 700; color: #9a3412; margin-bottom: .35rem; }
+.setup-hero p { font-size: .9rem; color: #555; }
+.setup-printer-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: .75rem; margin-top: .75rem; }
+.setup-printer-card { border: 2px solid #e5e5e5; border-radius: 12px; padding: 1rem; background: #fff; cursor: pointer; text-align: left; transition: all .15s; }
+.setup-printer-card:hover { border-color: #f97316; background: #fff7ed; }
+.setup-printer-card.selected { border-color: #f97316; background: #fff7ed; box-shadow: 0 2px 10px rgba(249,115,22,.15); }
+.setup-printer-card .sp-name { font-weight: 700; font-size: .95rem; color: #1a1a1a; margin-bottom: .25rem; }
+.setup-printer-card .sp-tag { display: inline-block; font-size: .72rem; font-weight: 600; padding: .15rem .5rem; border-radius: 6px; background: #f3f4f6; color: #374151; }
+.setup-printer-card .sp-tag.thermal { background: #dcfce7; color: #166534; }
+.btn-lg { padding: .75rem 1.25rem; font-size: .95rem; font-weight: 600; border-radius: 10px; }
+.btn-success { background: #16a34a; color: #fff; border-color: #16a34a; }
+.btn-success:hover { background: #15803d; }

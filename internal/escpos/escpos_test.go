@@ -2,8 +2,6 @@ package escpos
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"golang.org/x/text/encoding/charmap"
@@ -67,7 +65,7 @@ func TestKickDrawerBounds(t *testing.T) {
 }
 
 func TestKitchenTemplateContainsOrder(t *testing.T) {
-	got, err := RenderTemplate("kitchen", "cp850", 32, Header{
+	got, err := RenderKitchen("cp850", 32, Header{
 		OrderNumber:  123,
 		CustomerName: "Juan",
 		DeliveryType: "take_away",
@@ -75,7 +73,7 @@ func TestKitchenTemplateContainsOrder(t *testing.T) {
 		{Qty: 2, Name: "Pizza Muzza", Modifiers: []string{"Extra queso"}},
 	}, Options{Cut: "partial"})
 	if err != nil {
-		t.Fatalf("RenderTemplate: %v", err)
+		t.Fatalf("RenderKitchen: %v", err)
 	}
 	if !bytes.Contains(got, []byte("PEDIDO #123")) {
 		t.Errorf("expected ticket to contain PEDIDO #123")
@@ -93,59 +91,23 @@ func TestKitchenTemplateContainsOrder(t *testing.T) {
 }
 
 func TestKitchenTemplateEmptyItems(t *testing.T) {
-	_, err := RenderTemplate("kitchen", "cp850", 32, Header{OrderNumber: 1}, nil, Options{})
+	_, err := RenderKitchen("cp850", 32, Header{OrderNumber: 1}, nil, Options{})
 	if err != ErrEmptyPayload {
 		t.Errorf("expected ErrEmptyPayload, got %v", err)
 	}
 }
 
 func TestKitchenTemplateCopies(t *testing.T) {
-	once, err := RenderTemplate("kitchen", "cp850", 32, Header{OrderNumber: 1}, []Item{{Qty: 1, Name: "X"}}, Options{Cut: "partial"})
+	once, err := RenderKitchen("cp850", 32, Header{OrderNumber: 1}, []Item{{Qty: 1, Name: "X"}}, Options{Cut: "partial"})
 	if err != nil {
 		t.Fatalf("once: %v", err)
 	}
-	thrice, err := RenderTemplate("kitchen", "cp850", 32, Header{OrderNumber: 1}, []Item{{Qty: 1, Name: "X"}}, Options{Cut: "partial", Copies: 3})
+	thrice, err := RenderKitchen("cp850", 32, Header{OrderNumber: 1}, []Item{{Qty: 1, Name: "X"}}, Options{Cut: "partial", Copies: 3})
 	if err != nil {
 		t.Fatalf("thrice: %v", err)
 	}
 	if len(thrice) != 3*len(once) {
 		t.Errorf("copies: got len %d, want %d", len(thrice), 3*len(once))
-	}
-}
-
-func TestTemplateSearchPrefersExecutableDirectory(t *testing.T) {
-	executableDir := t.TempDir()
-	cwd := t.TempDir()
-	for dir, content := range map[string]string{
-		executableDir: "EXECUTABLE TEMPLATE",
-		cwd:           "WORKING DIRECTORY TEMPLATE",
-	} {
-		templateDir := filepath.Join(dir, "templates")
-		if err := os.MkdirAll(templateDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(templateDir, "custom.tmpl"), []byte(content), 0o600); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-	}
-
-	wantPath := filepath.Join(executableDir, "templates", "custom.tmpl")
-	if got := resolveTemplatePathIn("custom", executableDir, cwd); got != wantPath {
-		t.Fatalf("resolveTemplatePathIn = %q, want executable template %q", got, wantPath)
-	}
-	body, gotPath := loadTemplateBody("custom", executableDir, cwd)
-	if gotPath != wantPath || string(body) != "EXECUTABLE TEMPLATE" {
-		t.Fatalf("loaded template = (%q, %q), want executable template at %q", body, gotPath, wantPath)
-	}
-}
-
-func TestTemplateFallsBackToHardcodedDefault(t *testing.T) {
-	body, path := loadTemplateBody("missing", t.TempDir())
-	if path != "<default>" {
-		t.Errorf("template path = %q, want <default>", path)
-	}
-	if string(body) != defaultKitchenTemplate {
-		t.Errorf("template body did not fall back to hardcoded default")
 	}
 }
 

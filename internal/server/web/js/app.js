@@ -54,11 +54,16 @@
     const pin = $('#pin-input').value;
     try {
       const body = { pin: pin };
-      await fetch(API_BASE + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await fetch(API_BASE + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error('unauthorized');
       loggedIn = true;
       $('#login-screen').classList.add('hidden');
       $('#main-screen').classList.remove('hidden');
-      loadDashboard();
+      if (window.location.hash === '#setup') {
+        route('setup');
+      } else {
+        loadDashboard();
+      }
       startRefresh();
     } catch (err) {
       $('#login-error').textContent = 'PIN incorrecto';
@@ -130,6 +135,7 @@
     $$('.view').forEach(function (v) { v.classList.add('hidden'); });
     $('#view-' + view).classList.remove('hidden');
     if (view === 'dashboard') loadDashboard();
+    if (view === 'setup') loadSetup();
     if (view === 'printers') loadPrinters();
     if (view === 'jobs') loadJobs();
     if (view === 'settings') loadSettings();
@@ -520,6 +526,172 @@
     } catch (e) { toast('Error: ' + e.message, 'error'); }
   }
 
+  // ---------- friendly setup wizard ----------
+  var setupState = { detected: [], selectedIdx: -1, role: 'cocina', width: 42, isNet: false, lastPrinterId: '' };
+
+  async function loadSetup() {
+    var v = $('#view-setup');
+    v.innerHTML = '<div class="setup-hero"><h2>Asistente de Impresora</h2><p>Buscando impresoras conectadas a esta PC...</p></div>';
+    try {
+      var det = await api('GET', '/printers/detect');
+      setupState.detected = det.printers || [];
+      if (setupState.detected.length > 0 && setupState.selectedIdx < 0) {
+        var thermalIdx = setupState.detected.findIndex(function (p) { return p.suggested_type === 'usb'; });
+        setupState.selectedIdx = thermalIdx >= 0 ? thermalIdx : 0;
+      }
+      renderSetup();
+    } catch (e) {
+      v.innerHTML = '<div class="card"><p class="text-muted">No se pudieron detectar impresoras: ' + esc(e.message) + '</p></div>';
+    }
+  }
+
+  function renderSetup() {
+    var v = $('#view-setup');
+    var det = setupState.detected;
+    var cardsHtml = det.map(function (d, i) {
+      var isThermal = d.suggested_type === 'usb';
+      var sel = (!setupState.isNet && setupState.selectedIdx === i) ? ' selected' : '';
+      return '<button type="button" class="setup-printer-card' + sel + '" data-idx="' + i + '">' +
+        '<div class="sp-name">' + esc(d.name) + '</div>' +
+        '<span class="sp-tag' + (isThermal ? ' thermal' : '') + '">' + (isThermal ? 'Ticketera termica (Recomendada)' : 'Impresora comun / PDF') + '</span>' +
+      '</button>';
+    }).join('');
+
+    cardsHtml += '<button type="button" class="setup-printer-card' + (setupState.isNet ? ' selected' : '') + '" id="sp-net-card">' +
+      '<div class="sp-name">Impresora de Red (Cable / Wi-Fi)</div>' +
+      '<span class="sp-tag">Por direccion IP (puerto 9100)</span>' +
+    '</button>';
+
+    v.innerHTML =
+      '<div class="setup-hero">' +
+        '<h2>Configura tu impresora en 2 pasos</h2>' +
+        '<p>Elegi donde queres que salgan las comandas y hace una prueba real en papel.</p>' +
+      '</div>' +
+      '<div class="card">' +
+        '<h3 class="card-title mb-2">Paso 1: Elegi tu impresora</h3>' +
+        '<div class="setup-printer-grid">' + cardsHtml + '</div>' +
+        '<div id="sp-net-fields" class="' + (setupState.isNet ? 'mt-2 grid-2' : 'hidden') + '">' +
+          '<div class="form-group"><label class="form-label">IP de la impresora</label><input class="form-input" id="sp-ip" placeholder="192.168.1.100" value="192.168.1.100"></div>' +
+          '<div class="form-group"><label class="form-label">Puerto</label><input class="form-input" id="sp-port" type="number" value="9100"></div>' +
+        '</div>' +
+        '<div class="grid-2 mt-2" style="margin-top:1rem">' +
+          '<div class="form-group"><label class="form-label">¿Para que se usa?</label>' +
+            '<select class="form-select" id="sp-role">' +
+              '<option value="cocina"' + (setupState.role === 'cocina' ? ' selected' : '') + '>Cocina (Comandas)</option>' +
+              '<option value="caja"' + (setupState.role === 'caja' ? ' selected' : '') + '>Caja (Tickets / Cuenta)</option>' +
+              '<option value="barra"' + (setupState.role === 'barra' ? ' selected' : '') + '>Barra / Pizzeria</option>' +
+            '</select>' +
+          '</div>' +
+          '<div class="form-group"><label class="form-label">Ancho del rollo de papel</label>' +
+            '<select class="form-select" id="sp-width">' +
+              '<option value="42"' + (setupState.width === 42 ? ' selected' : '') + '>80 mm (Normal - mas comun)</option>' +
+              '<option value="32"' + (setupState.width === 32 ? ' selected' : '') + '>58 mm (Rollo chico)</option>' +
+            '</select>' +
+          '</div>' +
+        '</div>' +
+        '<button class="btn btn-primary btn-lg" id="sp-save-btn">Guardar y pasar a la prueba</button>' +
+      '</div>' +
+      '<div class="card' + (setupState.lastPrinterId ? '' : ' hidden') + '" id="sp-step2">' +
+        '<h3 class="card-title mb-2">Paso 2: Proba que salga el papel</h3>' +
+        '<p class="text-muted mb-2">Toca el boton verde para imprimir un ticket de prueba en <strong>' + esc(setupState.lastPrinterId) + '</strong>.</p>' +
+        '<div class="flex flex-wrap gap-1">' +
+          '<button class="btn btn-success btn-lg" id="sp-test-btn">Imprimir ticket de prueba</button>' +
+          '<button class="btn btn-lg hidden" id="sp-ok-btn">¡Si, salio perfecto!</button>' +
+          '<button class="btn btn-lg hidden" id="sp-retry-gdi-btn">No salio, probar otro modo</button>' +
+        '</div>' +
+      '</div>';
+
+    $$('.setup-printer-card[data-idx]').forEach(function (btn) {
+      btn.onclick = function () {
+        setupState.isNet = false;
+        setupState.selectedIdx = parseInt(btn.dataset.idx, 10);
+        renderSetup();
+      };
+    });
+    $('#sp-net-card').onclick = function () {
+      setupState.isNet = true;
+      renderSetup();
+    };
+    $('#sp-role').onchange = function () { setupState.role = this.value; };
+    $('#sp-width').onchange = function () { setupState.width = parseInt(this.value, 10) || 42; };
+
+    $('#sp-save-btn').onclick = async function () {
+      try {
+        var cfg = await api('GET', '/config');
+        var role = $('#sp-role').value;
+        var width = parseInt($('#sp-width').value, 10) || 42;
+        var p;
+        if (setupState.isNet) {
+          p = {
+            id: role, name: 'Impresora ' + role, type: 'network',
+            host: $('#sp-ip').value.trim(), port: parseInt($('#sp-port').value, 10) || 9100,
+            timeout_ms: 3000, code_page: 'cp850', chars_per_line: width, cut: 'partial'
+          };
+        } else {
+          if (setupState.selectedIdx < 0 || !det[setupState.selectedIdx]) {
+            return toast('Elegi una impresora primero', 'warn');
+          }
+          var d = det[setupState.selectedIdx];
+          p = {
+            id: role, name: d.name, type: d.suggested_type || 'usb',
+            system_name: d.name, code_page: 'cp850', chars_per_line: width, cut: 'partial'
+          };
+        }
+        var idx = (cfg.printers || []).findIndex(function (x) { return x.id === p.id; });
+        if (idx >= 0) { cfg.printers[idx] = p; } else { cfg.printers = (cfg.printers || []).concat([p]); }
+        await api('PUT', '/config', cfg);
+        setupState.lastPrinterId = p.id;
+        toast('Impresora guardada. Ahora proba imprimir!', 'success');
+        renderSetup();
+      } catch (e) { toast('Error al guardar: ' + e.message, 'error'); }
+    };
+
+    var testBtn = $('#sp-test-btn');
+    if (testBtn) {
+      testBtn.onclick = async function () {
+        try {
+          await api('POST', '/print', {
+            printer_id: setupState.lastPrinterId,
+            template: 'kitchen',
+            header: { order_number: 0, customer_name: 'PRUEBA TOMAPEDIDOS', delivery_type: 'take_away' },
+            items: [{ qty: 1, name: 'Ticket de prueba - Todo OK!' }]
+          });
+          toast('Ticket enviado a la impresora', 'success');
+          $('#sp-ok-btn').classList.remove('hidden');
+          $('#sp-retry-gdi-btn').classList.remove('hidden');
+        } catch (e) {
+          toast('Error al imprimir: ' + e.message, 'error');
+          api('POST', '/setup/feedback', { status: 'error', printer_id: setupState.lastPrinterId, detail: e.message }).catch(function () {});
+        }
+      };
+    }
+
+    var okBtn = $('#sp-ok-btn');
+    if (okBtn) {
+      okBtn.onclick = function () {
+        api('POST', '/setup/feedback', { status: 'ok', printer_id: setupState.lastPrinterId, detail: 'Impresion fisica confirmada en asistente web' }).catch(function () {});
+        toast('¡Excelente! Tu local quedo listo para imprimir comandas.', 'success');
+        route('dashboard');
+      };
+    }
+
+    var retryBtn = $('#sp-retry-gdi-btn');
+    if (retryBtn) {
+      retryBtn.onclick = async function () {
+        try {
+          var cfg = await api('GET', '/config');
+          var p = (cfg.printers || []).find(function (x) { return x.id === setupState.lastPrinterId; });
+          if (!p || p.type === 'network') return toast('Para impresoras de red verifica la IP y que este encendida', 'warn');
+          p.type = (p.type === 'usb') ? 'usb-gdi' : 'usb';
+          await api('PUT', '/config', cfg);
+          api('POST', '/setup/feedback', { status: 'retry', printer_id: setupState.lastPrinterId, detail: 'No salio ticket, cambiando modo a ' + p.type }).catch(function () {});
+          toast('Modo cambiado a ' + p.type + '. Reintentando...', 'warn');
+          $('#sp-test-btn').click();
+        } catch (e) { toast('Error: ' + e.message, 'error'); }
+      };
+    }
+  }
+
   // ---------- settings ----------
   async function loadSettings() { renderSettings(); }
   async function renderSettings() {
@@ -545,6 +717,9 @@
   async function init() {
     $('#login-form').onsubmit = doLogin;
     $('#logout-btn').onclick = logout;
+    if (window.location.hash === '#setup' && $('#setup-pin-hint')) {
+      $('#setup-pin-hint').classList.remove('hidden');
+    }
     $$('.nav-btn').forEach(function (b) {
       b.onclick = function () { route(b.dataset.route); };
     });
@@ -554,7 +729,11 @@
       loggedIn = true;
       $('#login-screen').classList.add('hidden');
       $('#main-screen').classList.remove('hidden');
-      loadDashboard();
+      if (window.location.hash === '#setup') {
+        route('setup');
+      } else {
+        loadDashboard();
+      }
       startRefresh();
     } catch (_) {
       // No valid session — show login screen (default from HTML).

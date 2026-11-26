@@ -86,6 +86,7 @@ func New(d Deps) http.Handler {
 
 	// Public endpoints (called by the SaaS browser, no PIN required).
 	r.Get("/health", healthHandler(d))
+	r.Get("/diagnostics", diagnosticsHandler(d))
 	r.Get("/printers", listPrintersHandler(d))
 	r.Get("/printers/{id}", getPrinterHandler(d))
 	r.Get("/events", eventsHandler(d))
@@ -106,6 +107,7 @@ func New(d Deps) http.Handler {
 		pr.Get("/config", configGetHandler(d))
 		pr.Put("/config", configPutHandler(d))
 		pr.Get("/printers/detect", detectPrintersHandler(d))
+		pr.Post("/setup/feedback", setupFeedbackHandler(d))
 	})
 
 	// SPA panel — all unmatched routes fall back to index.html so

@@ -203,8 +203,8 @@ func submitJob(d Deps, req PrintJob) (*queue.Job, error) {
 	return job, nil
 }
 
-// renderToBytes turns the request payload into ESC/POS bytes using the
-// appropriate template (kitchen vs receipt/cash).
+// renderToBytes turns the request payload into ESC/POS bytes (kitchen vs
+// receipt/cash).
 func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
 	if info.Type == "usb-office" || info.Type == "usb-gdi" {
 		return renderOfficePlainText(req, info.Type)
@@ -252,7 +252,10 @@ func renderToBytes(info printer.Info, req PrintJob) ([]byte, error) {
 		Footer:           req.Footer,
 		QRCode:           req.QRCode,
 	}
-	return escpos.RenderTemplate(req.Template, codePage, chars, header, items, opts)
+	if req.Template == "receipt" || req.Template == "cash" {
+		return escpos.RenderReceipt(codePage, chars, header, items, opts)
+	}
+	return escpos.RenderKitchen(codePage, chars, header, items, opts)
 }
 
 func renderOfficePlainText(req PrintJob, printerType string) ([]byte, error) {
