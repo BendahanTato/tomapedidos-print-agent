@@ -98,6 +98,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           & $iscc "/DAppVersion=$ver" "/DAppArch=$arch" "/DAppExe=$exePath" install\installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Move-Item -Force "dist\print-agent-windows-${arch}-setup.exe" "print-agent-windows-${arch}-setup.exe"
       - name: sign Windows executable with Azure Trusted Signing
         if: ${{ matrix.target.goos == 'windows' && env.SIGNING_ENABLED == 'true' && env.SIGNING_SECRETS_PRESENT == 'true' && env.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && env.AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME != '' }}
         uses: azure/trusted-signing-action@v0
@@ -120,7 +121,7 @@ jobs:
           if-no-files-found: ignore
           path: |
             print-agent-${{ matrix.target.goos }}-${{ matrix.target.goarch }}${{ matrix.target.goos == 'windows' && '.exe' || '' }}
-            dist/print-agent-windows-${{ matrix.target.goarch }}-setup.exe
+            print-agent-windows-${{ matrix.target.goarch }}-setup.exe
 
   release:
     needs: build
