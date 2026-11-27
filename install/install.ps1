@@ -245,6 +245,23 @@ function Get-WindowsPrintersList {
   return @($list)
 }
 
+function New-PrinterSlugId {
+  param(
+    [string]$Name,
+    [hashtable]$UsedIds
+  )
+  $slug = ($Name.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+  if ([string]::IsNullOrWhiteSpace($slug)) { $slug = "impresora" }
+  $candidate = $slug
+  $n = 2
+  while ($UsedIds.ContainsKey($candidate)) {
+    $candidate = "$slug-$n"
+    $n++
+  }
+  $UsedIds[$candidate] = $true
+  return $candidate
+}
+
 function Show-GuiPrinterWizard {
   param(
     [Parameter(Mandatory = $true)]$CfgJson,
@@ -261,8 +278,8 @@ function Show-GuiPrinterWizard {
   $winPrinters = Get-WindowsPrintersList
 
   $form = New-Object System.Windows.Forms.Form
-  $form.Text = "TomaPedidos Print Agent - Configuracion"
-  $form.Size = New-Object System.Drawing.Size(540, 500)
+  $form.Text = "TomaPedidos Print Agent - Configurar Impresoras"
+  $form.Size = New-Object System.Drawing.Size(580, 610)
   $form.StartPosition = "CenterScreen"
   $form.FormBorderStyle = "FixedDialog"
   $form.MaximizeBox = $false
@@ -275,239 +292,289 @@ function Show-GuiPrinterWizard {
   })
 
   $lblTitle = New-Object System.Windows.Forms.Label
-  $lblTitle.Text = "Configura tu impresora en 2 pasos"
+  $lblTitle.Text = "Deja listas tus impresoras"
   $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Bold)
   $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(154, 52, 18)
-  $lblTitle.Location = New-Object System.Drawing.Point(24, 18)
-  $lblTitle.Size = New-Object System.Drawing.Size(480, 28)
+  $lblTitle.Location = New-Object System.Drawing.Point(24, 16)
+  $lblTitle.Size = New-Object System.Drawing.Size(520, 26)
   $form.Controls.Add($lblTitle)
 
   $lblSub = New-Object System.Windows.Forms.Label
-  $lblSub.Text = "Local: $($CfgJson.tenant.id) / $($CfgJson.tenant.branch_id)  |  Servicio activo en puerto $ListenPort"
+  $lblSub.Text = "Tilda todas las impresoras que usa el local (luego las asignas a cada comanda en TomaPedidos)."
   $lblSub.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
-  $lblSub.Location = New-Object System.Drawing.Point(24, 48)
-  $lblSub.Size = New-Object System.Drawing.Size(480, 20)
+  $lblSub.Location = New-Object System.Drawing.Point(24, 44)
+  $lblSub.Size = New-Object System.Drawing.Size(525, 22)
   $form.Controls.Add($lblSub)
 
-  $lblPrinter = New-Object System.Windows.Forms.Label
-  $lblPrinter.Text = "1. Elegi la impresora conectada a esta PC:"
-  $lblPrinter.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-  $lblPrinter.Location = New-Object System.Drawing.Point(24, 84)
-  $lblPrinter.Size = New-Object System.Drawing.Size(480, 22)
-  $form.Controls.Add($lblPrinter)
+  $lblList = New-Object System.Windows.Forms.Label
+  $lblList.Text = "1. Impresoras detectadas (podes tildar una o varias):"
+  $lblList.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+  $lblList.Location = New-Object System.Drawing.Point(24, 74)
+  $lblList.Size = New-Object System.Drawing.Size(520, 20)
+  $form.Controls.Add($lblList)
 
-  $cmbPrinter = New-Object System.Windows.Forms.ComboBox
-  $cmbPrinter.DropDownStyle = "DropDownList"
-  $cmbPrinter.Location = New-Object System.Drawing.Point(24, 108)
-  $cmbPrinter.Size = New-Object System.Drawing.Size(474, 28)
+  $chkPrinters = New-Object System.Windows.Forms.CheckedListBox
+  $chkPrinters.CheckOnClick = $true
+  $chkPrinters.Location = New-Object System.Drawing.Point(24, 98)
+  $chkPrinters.Size = New-Object System.Drawing.Size(518, 135)
+  $chkPrinters.BorderStyle = "FixedSingle"
 
-  $printerChoices = [System.Collections.ArrayList]::new()
-  $defaultSelectIdx = 0
-  $idx = 0
+  $printerItems = [System.Collections.ArrayList]::new()
+  $existingBySysName = @{}
+  if ($CfgJson.printers) {
+    foreach ($ep in $CfgJson.printers) {
+      if ($ep.system_name) { $existingBySysName[$ep.system_name] = $ep }
+    }
+  }
+
   foreach ($wp in $winPrinters) {
     $isThermal = Test-IsLikelyThermalPrinter -Printer $wp
+    $alreadyConfigured = $existingBySysName.ContainsKey($wp.Name)
     $label = if ($isThermal) { "$($wp.Name)  [TERMICA RECOMENDADA]" } else { "$($wp.Name)  (Impresora comun)" }
-    [void]$cmbPrinter.Items.Add($label)
-    [void]$printerChoices.Add([PSCustomObject]@{ Kind = "win"; Printer = $wp; IsThermal = $isThermal })
-    if ($isThermal -and $defaultSelectIdx -eq 0) { $defaultSelectIdx = $idx }
-    $idx++
+    $idx = $chkPrinters.Items.Add($label)
+    if ($isThermal -or $alreadyConfigured) {
+      $chkPrinters.SetItemChecked($idx, $true)
+    }
+    $defType = if ($alreadyConfigured) { $existingBySysName[$wp.Name].type } elseif ($isThermal) { "usb" } else { "usb-gdi" }
+    [void]$printerItems.Add([PSCustomObject]@{ Kind = "win"; Name = $wp.Name; SystemName = $wp.Name; Type = $defType; Host = ""; Port = 9100 })
   }
-  [void]$cmbPrinter.Items.Add("Impresora de Red (Cable / Wi-Fi por IP)")
-  [void]$printerChoices.Add([PSCustomObject]@{ Kind = "network"; Printer = $null; IsThermal = $true })
-  if ($cmbPrinter.Items.Count -gt 0) { $cmbPrinter.SelectedIndex = $defaultSelectIdx }
-  $form.Controls.Add($cmbPrinter)
 
-  $lblIp = New-Object System.Windows.Forms.Label
-  $lblIp.Text = "IP de la impresora:"
-  $lblIp.Location = New-Object System.Drawing.Point(24, 145)
-  $lblIp.Size = New-Object System.Drawing.Size(130, 22)
-  $lblIp.Visible = $false
-  $form.Controls.Add($lblIp)
+  if ($CfgJson.printers) {
+    foreach ($ep in $CfgJson.printers) {
+      if ($ep.type -eq "network") {
+        $idx = $chkPrinters.Items.Add("$($ep.name)  [RED $($ep.host):$($ep.port)]")
+        $chkPrinters.SetItemChecked($idx, $true)
+        [void]$printerItems.Add([PSCustomObject]@{ Kind = "network"; Name = $ep.name; SystemName = ""; Type = "network"; Host = $ep.host; Port = $ep.port })
+      }
+    }
+  }
+  $form.Controls.Add($chkPrinters)
+
+  # Fila opcional para agregar impresora de red (IP:9100)
+  $lblNet = New-Object System.Windows.Forms.Label
+  $lblNet.Text = "Impresora de red (opcional):"
+  $lblNet.Location = New-Object System.Drawing.Point(24, 242)
+  $lblNet.Size = New-Object System.Drawing.Size(175, 20)
+  $form.Controls.Add($lblNet)
+
+  $txtNetName = New-Object System.Windows.Forms.TextBox
+  $txtNetName.Text = "Ticketera Red"
+  $txtNetName.Location = New-Object System.Drawing.Point(24, 264)
+  $txtNetName.Size = New-Object System.Drawing.Size(150, 24)
+  $form.Controls.Add($txtNetName)
 
   $txtIp = New-Object System.Windows.Forms.TextBox
   $txtIp.Text = "192.168.1.100"
-  $txtIp.Location = New-Object System.Drawing.Point(155, 143)
-  $txtIp.Size = New-Object System.Drawing.Size(160, 24)
-  $txtIp.Visible = $false
+  $txtIp.Location = New-Object System.Drawing.Point(182, 264)
+  $txtIp.Size = New-Object System.Drawing.Size(145, 24)
   $form.Controls.Add($txtIp)
-
-  $lblNetPort = New-Object System.Windows.Forms.Label
-  $lblNetPort.Text = "Puerto:"
-  $lblNetPort.Location = New-Object System.Drawing.Point(330, 145)
-  $lblNetPort.Size = New-Object System.Drawing.Size(55, 22)
-  $lblNetPort.Visible = $false
-  $form.Controls.Add($lblNetPort)
 
   $txtNetPort = New-Object System.Windows.Forms.TextBox
   $txtNetPort.Text = "9100"
-  $txtNetPort.Location = New-Object System.Drawing.Point(390, 143)
-  $txtNetPort.Size = New-Object System.Drawing.Size(108, 24)
-  $txtNetPort.Visible = $false
+  $txtNetPort.Location = New-Object System.Drawing.Point(335, 264)
+  $txtNetPort.Size = New-Object System.Drawing.Size(65, 24)
   $form.Controls.Add($txtNetPort)
 
-  $cmbPrinter.Add_SelectedIndexChanged({
-    $sel = $printerChoices[$cmbPrinter.SelectedIndex]
-    $isNet = ($sel -and $sel.Kind -eq "network")
-    $lblIp.Visible = $isNet; $txtIp.Visible = $isNet
-    $lblNetPort.Visible = $isNet; $txtNetPort.Visible = $isNet
-  })
-
-  $lblRole = New-Object System.Windows.Forms.Label
-  $lblRole.Text = "¿Para que se usa?"
-  $lblRole.Location = New-Object System.Drawing.Point(24, 182)
-  $lblRole.Size = New-Object System.Drawing.Size(220, 20)
-  $form.Controls.Add($lblRole)
-
-  $cmbRole = New-Object System.Windows.Forms.ComboBox
-  $cmbRole.DropDownStyle = "DropDownList"
-  $cmbRole.Location = New-Object System.Drawing.Point(24, 204)
-  $cmbRole.Size = New-Object System.Drawing.Size(225, 28)
-  [void]$cmbRole.Items.Add("Cocina (Comandas)")
-  [void]$cmbRole.Items.Add("Caja (Tickets / Cuenta)")
-  [void]$cmbRole.Items.Add("Barra / Pizzeria")
-  $cmbRole.SelectedIndex = 0
-  $form.Controls.Add($cmbRole)
+  $btnAddNet = New-Object System.Windows.Forms.Button
+  $btnAddNet.Text = "+ Agregar Red"
+  $btnAddNet.BackColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
+  $btnAddNet.FlatStyle = "Flat"
+  $btnAddNet.Location = New-Object System.Drawing.Point(408, 263)
+  $btnAddNet.Size = New-Object System.Drawing.Size(134, 26)
+  $form.Controls.Add($btnAddNet)
 
   $lblWidth = New-Object System.Windows.Forms.Label
   $lblWidth.Text = "Ancho del rollo de papel:"
-  $lblWidth.Location = New-Object System.Drawing.Point(273, 182)
-  $lblWidth.Size = New-Object System.Drawing.Size(225, 20)
+  $lblWidth.Location = New-Object System.Drawing.Point(24, 300)
+  $lblWidth.Size = New-Object System.Drawing.Size(200, 20)
   $form.Controls.Add($lblWidth)
 
   $cmbWidth = New-Object System.Windows.Forms.ComboBox
   $cmbWidth.DropDownStyle = "DropDownList"
-  $cmbWidth.Location = New-Object System.Drawing.Point(273, 204)
-  $cmbWidth.Size = New-Object System.Drawing.Size(225, 28)
+  $cmbWidth.Location = New-Object System.Drawing.Point(24, 322)
+  $cmbWidth.Size = New-Object System.Drawing.Size(240, 28)
   [void]$cmbWidth.Items.Add("80 mm (Normal - mas comun)")
   [void]$cmbWidth.Items.Add("58 mm (Rollo chico)")
   $cmbWidth.SelectedIndex = 0
   $form.Controls.Add($cmbWidth)
 
-  $lblStatus = New-Object System.Windows.Forms.Label
-  $lblStatus.Text = "2. Toca el boton naranja para guardar la impresora y enviar un ticket de prueba."
-  $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
-  $lblStatus.Location = New-Object System.Drawing.Point(24, 252)
-  $lblStatus.Size = New-Object System.Drawing.Size(474, 52)
-  $form.Controls.Add($lblStatus)
+  $btnSave = New-Object System.Windows.Forms.Button
+  $btnSave.Text = "1. Guardar impresoras"
+  $btnSave.BackColor = [System.Drawing.Color]::FromArgb(249, 115, 22)
+  $btnSave.ForeColor = [System.Drawing.Color]::White
+  $btnSave.FlatStyle = "Flat"
+  $btnSave.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+  $btnSave.Location = New-Object System.Drawing.Point(280, 316)
+  $btnSave.Size = New-Object System.Drawing.Size(262, 36)
+  $form.Controls.Add($btnSave)
+
+  $lblTestTitle = New-Object System.Windows.Forms.Label
+  $lblTestTitle.Text = "2. Probar una impresora (opcional):"
+  $lblTestTitle.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+  $lblTestTitle.Location = New-Object System.Drawing.Point(24, 368)
+  $lblTestTitle.Size = New-Object System.Drawing.Size(520, 20)
+  $form.Controls.Add($lblTestTitle)
+
+  $cmbTestPrinter = New-Object System.Windows.Forms.ComboBox
+  $cmbTestPrinter.DropDownStyle = "DropDownList"
+  $cmbTestPrinter.Location = New-Object System.Drawing.Point(24, 392)
+  $cmbTestPrinter.Size = New-Object System.Drawing.Size(310, 28)
+  $cmbTestPrinter.Enabled = $false
+  $form.Controls.Add($cmbTestPrinter)
 
   $btnTest = New-Object System.Windows.Forms.Button
-  $btnTest.Text = "Guardar e imprimir ticket de prueba"
-  $btnTest.BackColor = [System.Drawing.Color]::FromArgb(249, 115, 22)
-  $btnTest.ForeColor = [System.Drawing.Color]::White
+  $btnTest.Text = "Imprimir prueba"
+  $btnTest.BackColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
   $btnTest.FlatStyle = "Flat"
-  $btnTest.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-  $btnTest.Location = New-Object System.Drawing.Point(24, 312)
-  $btnTest.Size = New-Object System.Drawing.Size(474, 42)
+  $btnTest.Location = New-Object System.Drawing.Point(344, 391)
+  $btnTest.Size = New-Object System.Drawing.Size(198, 28)
+  $btnTest.Enabled = $false
   $form.Controls.Add($btnTest)
 
-  $btnOk = New-Object System.Windows.Forms.Button
-  $btnOk.Text = "¡Si, salio perfecto! (Finalizar)"
-  $btnOk.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
-  $btnOk.ForeColor = [System.Drawing.Color]::White
-  $btnOk.FlatStyle = "Flat"
-  $btnOk.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-  $btnOk.Location = New-Object System.Drawing.Point(24, 370)
-  $btnOk.Size = New-Object System.Drawing.Size(230, 40)
-  $btnOk.Enabled = $false
-  $form.Controls.Add($btnOk)
+  $lblStatus = New-Object System.Windows.Forms.Label
+  $lblStatus.Text = "Tilda las impresoras que usa el local y toca '1. Guardar impresoras'."
+  $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
+  $lblStatus.Location = New-Object System.Drawing.Point(24, 430)
+  $lblStatus.Size = New-Object System.Drawing.Size(518, 44)
+  $form.Controls.Add($lblStatus)
 
   $btnRetry = New-Object System.Windows.Forms.Button
-  $btnRetry.Text = "No salio, probar otro modo"
+  $btnRetry.Text = "No salio, cambiar modo"
   $btnRetry.BackColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
-  $btnRetry.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
   $btnRetry.FlatStyle = "Flat"
-  $btnRetry.Location = New-Object System.Drawing.Point(268, 370)
-  $btnRetry.Size = New-Object System.Drawing.Size(230, 40)
+  $btnRetry.Location = New-Object System.Drawing.Point(24, 486)
+  $btnRetry.Size = New-Object System.Drawing.Size(210, 40)
   $btnRetry.Enabled = $false
   $form.Controls.Add($btnRetry)
 
-  $script:GuiPrinterId = "cocina"
-  $script:GuiPrinterType = "usb"
+  $btnOk = New-Object System.Windows.Forms.Button
+  $btnOk.Text = "¡Listo! Finalizar"
+  $btnOk.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
+  $btnOk.ForeColor = [System.Drawing.Color]::White
+  $btnOk.FlatStyle = "Flat"
+  $btnOk.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+  $btnOk.Location = New-Object System.Drawing.Point(248, 486)
+  $btnOk.Size = New-Object System.Drawing.Size(294, 40)
+  $btnOk.Enabled = $false
+  $form.Controls.Add($btnOk)
 
-  $sendTestAction = {
+  $script:SavedPrintersList = @()
+
+  $btnAddNet.Add_Click({
+    $ipVal = $txtIp.Text.Trim()
+    $netName = $txtNetName.Text.Trim()
+    if ([string]::IsNullOrWhiteSpace($netName)) { $netName = "Red $ipVal" }
+    $np = 0
+    if ([string]::IsNullOrWhiteSpace($ipVal) -or -not [int]::TryParse($txtNetPort.Text, [ref]$np) -or $np -lt 1 -or $np -gt 65535) {
+      $lblStatus.Text = "Ingresa una IP valida y puerto entre 1 y 65535."
+      $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
+      return
+    }
+    $lblStatus.Text = "Probando conexion a ${ipVal}:${np}..."
+    $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
+    $form.Refresh()
+    $tcp = New-Object System.Net.Sockets.TcpClient
+    try {
+      $iar = $tcp.BeginConnect($ipVal, $np, $null, $null)
+      if (-not $iar.AsyncWaitHandle.WaitOne(1500, $false)) { throw "Tiempo de espera agotado" }
+      $tcp.EndConnect($iar)
+    } catch {
+      $lblStatus.Text = "No se pudo conectar a ${ipVal}:${np}. Verifica que este encendida y en la misma red."
+      $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
+      return
+    } finally {
+      $tcp.Close()
+    }
+    $idx = $chkPrinters.Items.Add("$netName  [RED ${ipVal}:${np}]")
+    $chkPrinters.SetItemChecked($idx, $true)
+    [void]$printerItems.Add([PSCustomObject]@{ Kind = "network"; Name = $netName; SystemName = ""; Type = "network"; Host = $ipVal; Port = $np })
+    $lblStatus.Text = "Impresora de red '$netName' agregada y tildada."
+    $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
+  })
+
+  $saveAllAction = {
+    $checkedIndices = @($chkPrinters.CheckedIndices)
+    if ($checkedIndices.Count -eq 0) {
+      $lblStatus.Text = "Tilda al menos una impresora antes de guardar."
+      $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
+      return $false
+    }
+    $chars = if ($cmbWidth.SelectedIndex -eq 1) { 32 } else { 42 }
+    $usedIds = @{}
+    $list = [System.Collections.ArrayList]::new()
+    foreach ($i in $checkedIndices) {
+      $item = $printerItems[$i]
+      $pId = New-PrinterSlugId -Name $item.Name -UsedIds $usedIds
+      $pObj = New-DefaultPrinterObject -Id $pId -Name $item.Name -Type $item.Type -SystemName $item.SystemName -HostIp $item.Host -NetPort $item.Port -CharsPerLine $chars
+      [void]$list.Add($pObj)
+    }
+    $CfgJson.printers = @($list)
+    Write-Utf8NoBom -Path $ConfigPath -Content ($CfgJson | ConvertTo-Json -Depth 10)
+    $script:SavedPrintersList = @($CfgJson.printers)
+    $script:Report.printers = @($CfgJson.printers | ForEach-Object { @{ id = $_.id; name = $_.name; type = $_.type; system_name = $_.system_name; host = $_.host } })
+
+    $lblStatus.Text = "Guardando configuracion y reiniciando servicio..."
+    $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
+    $form.Refresh()
+
+    Restart-Service -Name $ServiceName -ErrorAction Stop
+    $h = Wait-ForAgentHealth -Port $ListenPort
+    if ($null -eq $h) { throw "El servicio no respondio despues de reiniciar." }
+
+    $cmbTestPrinter.Items.Clear()
+    foreach ($sp in $script:SavedPrintersList) {
+      [void]$cmbTestPrinter.Items.Add("$($sp.name) [$($sp.type)]")
+    }
+    if ($cmbTestPrinter.Items.Count -gt 0) { $cmbTestPrinter.SelectedIndex = 0 }
+    $cmbTestPrinter.Enabled = $true
+    $btnTest.Enabled = $true
+    $btnOk.Enabled = $true
+
+    Add-StepResult -StepId "4_impresoras" -Title "Impresoras guardadas (GUI)" -Status "ok" -Detail ("Total: " + $script:SavedPrintersList.Count)
+    $lblStatus.Text = "Se guardaron $($script:SavedPrintersList.Count) impresora(s). Podes probar alguna arriba o tocar '¡Listo! Finalizar'."
+    $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
+    return $true
+  }
+
+  $btnSave.Add_Click({
+    try { [void](& $saveAllAction) } catch {
+      $lblStatus.Text = "Error: $($_.Exception.Message)"
+      $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
+    }
+  })
+
+  $sendSingleTest = {
     param([bool]$ToggleMode = $false)
     try {
-      $sel = $printerChoices[$cmbPrinter.SelectedIndex]
-      $roleId = switch ($cmbRole.SelectedIndex) { 1 { "caja" } 2 { "barra" } default { "cocina" } }
-      $chars = if ($cmbWidth.SelectedIndex -eq 1) { 32 } else { 42 }
+      if ($cmbTestPrinter.SelectedIndex -lt 0 -or $script:SavedPrintersList.Count -eq 0) { return }
+      $target = $script:SavedPrintersList[$cmbTestPrinter.SelectedIndex]
 
       if ($ToggleMode) {
-        if ($script:GuiPrinterType -eq "network") {
-          $lblStatus.Text = "Para impresoras de red, verifica que este encendida y que la IP $($txtIp.Text) sea correcta."
+        if ($target.type -eq "network") {
+          $lblStatus.Text = "Para impresoras de red, verifica que este encendida y en la misma red."
           $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(180, 83, 9)
           return
         }
-        $script:GuiPrinterType = if ($script:GuiPrinterType -eq "usb") { "usb-gdi" } else { "usb" }
-      } else {
-        if ($sel.Kind -eq "network") {
-          $script:GuiPrinterType = "network"
-        } else {
-          $script:GuiPrinterType = if ($sel.IsThermal) { "usb" } else { "usb-gdi" }
+        $target.type = if ($target.type -eq "usb") { "usb-gdi" } else { "usb" }
+        foreach ($pi in $printerItems) {
+          if ($pi.Kind -eq "win" -and $pi.SystemName -eq $target.system_name) { $pi.Type = $target.type }
         }
+        Write-Utf8NoBom -Path $ConfigPath -Content ($CfgJson | ConvertTo-Json -Depth 10)
+        $cmbTestPrinter.Items[$cmbTestPrinter.SelectedIndex] = "$($target.name) [$($target.type)]"
+        Restart-Service -Name $ServiceName -ErrorAction Stop
+        $null = Wait-ForAgentHealth -Port $ListenPort
       }
-      $script:GuiPrinterId = $roleId
-
-      if ($script:GuiPrinterType -eq "network") {
-        $ipVal = $txtIp.Text.Trim()
-        $np = 0
-        if ([string]::IsNullOrWhiteSpace($ipVal) -or -not [int]::TryParse($txtNetPort.Text, [ref]$np) -or $np -lt 1 -or $np -gt 65535) {
-          $lblStatus.Text = "Ingresa una IP valida y un puerto entre 1 y 65535."
-          $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
-          return
-        }
-        $lblStatus.Text = "Probando conexion a ${ipVal}:${np}..."
-        $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
-        $form.Refresh()
-        $tcp = New-Object System.Net.Sockets.TcpClient
-        try {
-          $iar = $tcp.BeginConnect($ipVal, $np, $null, $null)
-          if (-not $iar.AsyncWaitHandle.WaitOne(1500, $false)) {
-            throw "Tiempo de espera agotado"
-          }
-          $tcp.EndConnect($iar)
-        } catch {
-          $lblStatus.Text = "No se pudo conectar a ${ipVal}:${np}. Verifica que este encendida, conectada a la red y que la IP sea correcta."
-          $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
-          return
-        } finally {
-          $tcp.Close()
-        }
-        $pObj = New-DefaultPrinterObject -Id $roleId -Name "Impresora $roleId" -Type "network" -HostIp $ipVal -NetPort $np -CharsPerLine $chars
-      } else {
-        $pObj = New-DefaultPrinterObject -Id $roleId -Name $sel.Printer.Name -Type $script:GuiPrinterType -SystemName $sel.Printer.Name -CharsPerLine $chars
-      }
-
-      $list = [System.Collections.ArrayList]::new()
-      if ($CfgJson.printers) {
-        foreach ($ep in $CfgJson.printers) {
-          if ($ep.id -ne $roleId) { [void]$list.Add($ep) }
-        }
-      }
-      [void]$list.Add($pObj)
-      $CfgJson.printers = @($list)
-      Write-Utf8NoBom -Path $ConfigPath -Content ($CfgJson | ConvertTo-Json -Depth 10)
-      $script:Report.printers = @($CfgJson.printers | ForEach-Object { @{ id = $_.id; name = $_.name; type = $_.type; system_name = $_.system_name; host = $_.host } })
-
-      $lblStatus.Text = "Aplicando configuracion y enviando ticket de prueba..."
-      $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
-      $form.Refresh()
-
-      Restart-Service -Name $ServiceName -ErrorAction Stop
-      $h = Wait-ForAgentHealth -Port $ListenPort
-      if ($null -eq $h) { throw "El servicio no respondio despues de reiniciar." }
 
       $testBody = @{
-        printer_id = $roleId
+        printer_id = $target.id
         template   = "kitchen"
         header     = @{ order_number = 0; customer_name = "PRUEBA INSTALADOR"; delivery_type = "take_away" }
-        items      = @( @{ qty = 1; name = "Ticket de prueba TomaPedidos" } )
+        items      = @( @{ qty = 1; name = "Prueba: $($target.name)" } )
       } | ConvertTo-Json -Depth 6
       $printResp = Invoke-RestMethod -Uri "http://127.0.0.1:${ListenPort}/print" -Method Post -ContentType "application/json; charset=utf-8" -Body $testBody -TimeoutSec 10
-      Add-StepResult -StepId "6_prueba_impresion" -Title "Ticket de prueba enviado (GUI)" -Status "ok" -Detail "job_id=$($printResp.id) printer=$roleId type=$($script:GuiPrinterType)"
-
-      $lblStatus.Text = "Ticket enviado (modo $($script:GuiPrinterType)). Revisa si salio el papel y confirma abajo."
+      Add-StepResult -StepId "6_prueba_impresion" -Title "Ticket de prueba enviado (GUI)" -Status "ok" -Detail "job_id=$($printResp.id) printer=$($target.id) type=$($target.type)"
+      $lblStatus.Text = "Ticket enviado a '$($target.name)' (modo $($target.type)). Si no salio, proba 'No salio, cambiar modo'."
       $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
-      $btnOk.Enabled = $true
       $btnRetry.Enabled = $true
     } catch {
       Add-StepResult -StepId "6_prueba_impresion" -Title "Error en prueba GUI" -Status "warn" -Detail $_.Exception.Message
@@ -517,17 +584,17 @@ function Show-GuiPrinterWizard {
     }
   }
 
-  $btnTest.Add_Click({ & $sendTestAction $false })
-  $btnRetry.Add_Click({ & $sendTestAction $true })
+  $btnTest.Add_Click({ & $sendSingleTest $false })
+  $btnRetry.Add_Click({ & $sendSingleTest $true })
   $btnOk.Add_Click({
-    Add-StepResult -StepId "6_prueba_validacion" -Title "Impresion fisica confirmada en instalador GUI" -Status "ok" -Detail "printer=$($script:GuiPrinterId) type=$($script:GuiPrinterType)"
+    Add-StepResult -StepId "6_prueba_validacion" -Title "Configuracion de impresoras confirmada (GUI)" -Status "ok" -Detail ("Total: " + $script:SavedPrintersList.Count)
     $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $form.Close()
   })
 
   $dialogRes = $form.ShowDialog()
   if ($dialogRes -ne [System.Windows.Forms.DialogResult]::OK) {
-    Add-StepResult -StepId "6_prueba_validacion" -Title "Asistente cerrado sin confirmar ticket" -Status "warn" -Detail "El operador cerro la ventana antes de confirmar la prueba."
+    Add-StepResult -StepId "6_prueba_validacion" -Title "Asistente cerrado sin confirmar" -Status "warn" -Detail "El operador cerro la ventana antes de tocar Finalizar."
   }
 }
 
