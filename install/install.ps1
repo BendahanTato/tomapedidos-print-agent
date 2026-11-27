@@ -1017,8 +1017,10 @@ try {
   }
 
   $serviceGrant = "${serviceAccount}:(OI)(CI)F"
+  # *S-1-5-32-545 = BUILTIN\Users (independiente del idioma: Users en EN, Usuarios en ES).
+  $usersGrant = "*S-1-5-32-545:(OI)(CI)M"
   foreach ($directory in @($configDir, $dataDir, $logsDir)) {
-    & icacls.exe $directory /grant $serviceGrant "Users:(OI)(CI)M" | Out-Null
+    & icacls.exe $directory /grant $serviceGrant $usersGrant | Out-Null
     if ($LASTEXITCODE -ne 0) {
       throw "No se pudieron aplicar permisos ACL en $directory (icacls codigo $LASTEXITCODE)."
     }
