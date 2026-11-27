@@ -104,6 +104,9 @@ func (m *scmManager) Install(exePath, configPath string) error {
 		if err := m.reconfigure(s, exePath, configPath); err != nil {
 			return err
 		}
+		if err := m.grantBinaryDirPermission(exePath); err != nil {
+			return err
+		}
 		return m.grantDataDirPermissions(configDir, dataDir, logsDir)
 	}
 
@@ -123,6 +126,9 @@ func (m *scmManager) Install(exePath, configPath string) error {
 
 	if err := s.SetRecoveryActions(recoveryActions(), 86400); err != nil {
 		return fmt.Errorf("set recovery actions for service %q: %w", m.label, err)
+	}
+	if err := m.grantBinaryDirPermission(exePath); err != nil {
+		return err
 	}
 	return m.grantDataDirPermissions(configDir, dataDir, logsDir)
 }
@@ -206,6 +212,27 @@ func ensureServiceDirsAndConfig(configPath string) (configDir, dataDir, logsDir 
 		}
 	}
 	return configDir, dataDir, logsDir, nil
+}
+
+// grantBinaryDirPermission grants modify rights on the agent install folder
+// ONLY to the virtual service account (never to standard Users), allowing
+// verified SHA256 remote self-updates while keeping Program Files protected.
+func (m *scmManager) grantBinaryDirPermission(exePath string) error {
+	binDir := filepath.Dir(exePath)
+	if binDir == "" || !strings.Contains(strings.ToLower(binDir), `tomapedidos`) {
+		return nil
+	}
+	serviceGrant := m.virtualAccountName() + ":(OI)(CI)M"
+	sysRoot := os.Getenv("SystemRoot")
+	if sysRoot == "" {
+		sysRoot = `C:\Windows`
+	}
+	icaclsPath := filepath.Join(sysRoot, "System32", "icacls.exe")
+	cmd := exec.Command(icaclsPath, binDir, "/grant", serviceGrant)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("icacls %q failed: %w (%s)", binDir, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // grantDataDirPermissions grants full control to the virtual service account

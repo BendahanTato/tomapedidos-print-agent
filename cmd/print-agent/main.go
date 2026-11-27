@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,6 +42,8 @@ import (
 	"github.com/tomapedidos/print-agent/internal/queue"
 	"github.com/tomapedidos/print-agent/internal/server"
 	"github.com/tomapedidos/print-agent/internal/service"
+	"github.com/tomapedidos/print-agent/internal/telemetry"
+	"github.com/tomapedidos/print-agent/internal/updater"
 	"github.com/tomapedidos/print-agent/internal/version"
 )
 
@@ -70,6 +73,8 @@ func main() {
 		runInitConfig(os.Args[2:])
 	case "doctor":
 		runDoctor(os.Args[2:])
+	case "update", "self-update":
+		runSelfUpdate(os.Args[2:])
 	case "start":
 		runStart(os.Args[2:], os.Stdout, os.Stderr)
 	case "install":
@@ -104,6 +109,7 @@ Subcommands:
   version                Print version and exit.
   init-config [path]     Write a starter config to path.
   doctor                 Print environment diagnostics.
+  update [--version tag] Download, verify SHA256, and replace binary.
   help                   Print this help.
   install   [--config]   Install as OS service (launchd / systemd / SCM).
   uninstall              Remove OS service registration.
@@ -216,6 +222,12 @@ func runDoctor(args []string) {
 					errSuffix = " error=" + p.LastError
 				}
 				fmt.Printf("  - live [%s] status=%s queue=%d%s\n", p.ID, p.Status, p.QueueDepth, errSuffix)
+			}
+			if hr.Telemetry != nil {
+				fmt.Printf("telemetry: enabled=%v last_status=%d last_err=%q\n", hr.Telemetry.Enabled, hr.Telemetry.LastStatusCode, hr.Telemetry.LastError)
+			}
+			if hr.Updater != nil {
+				fmt.Printf("updater:   enabled=%v available=%q last_err=%q\n", hr.Updater.Enabled, hr.Updater.AvailableVersion, hr.Updater.LastError)
 			}
 		}
 	}
@@ -416,23 +428,63 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 		reg.SetQueueDepth(id, 0)
 	}
 
+	startedAt := time.Now()
+	agentCtx, agentCancel := context.WithCancel(ctx)
+	defer agentCancel()
+
+	var restartForUpdate atomic.Bool
+	exePath, _ := os.Executable()
+
 	// Worker pool drains the queue. Start synchronously before serving HTTP so
 	// PUT /config hot-reloads always attach to the agent's root context.
 	pool := queue.NewPool(q, reg, cfg.Queue, log)
-	pool.Start(ctx)
-	go pool.Run(ctx)
+	pool.Start(agentCtx)
+	go pool.Run(agentCtx)
 
 	// Heartbeat keeps Status fresh.
-	go printer.Heartbeat(ctx, reg, log, 10*time.Second, bus)
+	go printer.Heartbeat(agentCtx, reg, log, 10*time.Second, bus)
+
+	up := updater.New(updater.Options{
+		CurrentVersion: version.Version,
+		ExePath:        exePath,
+		ConfigFn:       func() config.AutoUpdate { return cfgStore.Get().AutoUpdate },
+		IsIdle: func() bool {
+			for _, j := range q.List(25, "") {
+				if j.Status == queue.StatusPrinting || j.Status == queue.StatusQueued {
+					return false
+				}
+			}
+			return true
+		},
+		OnRestart: func() {
+			restartForUpdate.Store(true)
+			// Delay briefly so any in-flight HTTP response flushes cleanly.
+			time.AfterFunc(300*time.Millisecond, agentCancel)
+		},
+		Log: log,
+	})
+	go up.Run(agentCtx)
+
+	rep := telemetry.New(telemetry.Deps{
+		Config:    cfgStore,
+		Registry:  reg,
+		Queue:     q,
+		Updater:   up,
+		StartedAt: startedAt,
+		Log:       log,
+	})
+	go rep.Run(agentCtx)
 
 	mux := server.New(server.Deps{
 		Config:    cfgStore,
 		Registry:  reg,
 		Queue:     q,
 		Pool:      pool,
+		Telemetry: rep,
+		Updater:   up,
 		EventBus:  bus,
 		Log:       log,
-		StartedAt: time.Now(),
+		StartedAt: startedAt,
 	})
 
 	addr := fmt.Sprintf("%s:%d", listenHost, listenPort)
@@ -451,7 +503,7 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 	log.Info("listening", slog.String("addr", addr))
 
 	go func() {
-		<-ctx.Done()
+		<-agentCtx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
@@ -460,6 +512,10 @@ func runAgent(ctx context.Context, configPath string, port int, bind string, log
 	if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server crashed", slog.String("error", err.Error()))
 		return err
+	}
+	if restartForUpdate.Load() {
+		log.Info("restarting service to apply updated binary")
+		return updater.ErrRestartRequired
 	}
 	log.Info("bye")
 	return nil
@@ -527,6 +583,39 @@ func runServiceStop(_ []string) {
 		os.Exit(1)
 	}
 	fmt.Println("service stopped")
+}
+
+func runSelfUpdate(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	targetVer := fs.String("version", "latest", "target release tag (e.g. v0.4.1 or latest)")
+	repo := fs.String("repo", config.DefaultUpdateRepo, "GitHub owner/repo")
+	_ = fs.Parse(args)
+
+	exePath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve executable: %v\n", err)
+		os.Exit(1)
+	}
+	up := updater.New(updater.Options{
+		CurrentVersion: version.Version,
+		ExePath:        exePath,
+		ConfigFn: func() config.AutoUpdate {
+			return config.AutoUpdate{Enabled: true, Repo: *repo}
+		},
+	})
+	forceExact := *targetVer != "" && *targetVer != "latest"
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	updated, err := up.Apply(ctx, *targetVer, forceExact)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "update failed: %v\n", err)
+		os.Exit(1)
+	}
+	if !updated {
+		fmt.Printf("already up to date (%s)\n", version.Version)
+		return
+	}
+	fmt.Println("binary updated; if running as a service, restart it with: print-agent stop-svc && print-agent start-svc")
 }
 
 func runServiceStatus(_ []string) {

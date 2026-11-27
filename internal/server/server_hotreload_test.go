@@ -216,3 +216,41 @@ func TestCORSPrivateNetworkAccessPreflight(t *testing.T) {
 		t.Errorf("Allow-Private-Network = %q, want true", got)
 	}
 }
+
+func TestPairEndpointConfiguresTelemetryAndBlocksUntrustedHost(t *testing.T) {
+	ts, store, _, _ := setupTestServer(t)
+
+	// 1. Untrusted domain must be blocked with 403.
+	badBody := `{"tenant_id":"t1","branch_id":"b1","endpoint_url":"https://evil.example.com/steal"}`
+	badResp, err := http.Post(ts.URL+"/pair", "application/json", bytes.NewBufferString(badBody))
+	if err != nil {
+		t.Fatalf("POST /pair untrusted: %v", err)
+	}
+	_ = badResp.Body.Close()
+	if badResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("untrusted /pair status = %d, want 403", badResp.StatusCode)
+	}
+
+	// 2. Valid pair with omitted endpoint_url uses DefaultTelemetryEndpoint.
+	goodBody := `{"tenant_id":"pizzeria_1","branch_id":"sucursal_sur","token":"tok_abc"}`
+	goodResp, err := http.Post(ts.URL+"/pair", "application/json", bytes.NewBufferString(goodBody))
+	if err != nil {
+		t.Fatalf("POST /pair valid: %v", err)
+	}
+	_ = goodResp.Body.Close()
+	if goodResp.StatusCode != http.StatusOK {
+		t.Fatalf("valid /pair status = %d, want 200", goodResp.StatusCode)
+	}
+
+	cfg := store.Get()
+	if !cfg.Telemetry.Enabled {
+		t.Errorf("expected Telemetry.Enabled=true after /pair")
+	}
+	if cfg.Telemetry.EndpointURL != config.DefaultTelemetryEndpoint {
+		t.Errorf("EndpointURL = %q, want %q", cfg.Telemetry.EndpointURL, config.DefaultTelemetryEndpoint)
+	}
+	if cfg.Tenant.ID != "pizzeria_1" || cfg.Tenant.BranchID != "sucursal_sur" || cfg.Telemetry.Token != "tok_abc" {
+		t.Errorf("unexpected paired config: tenant=%+v token=%q", cfg.Tenant, cfg.Telemetry.Token)
+	}
+}
+

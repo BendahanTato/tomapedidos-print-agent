@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tomapedidos/print-agent/internal/telemetry"
+	"github.com/tomapedidos/print-agent/internal/updater"
 	"github.com/tomapedidos/print-agent/internal/version"
 )
 
@@ -11,13 +13,15 @@ import (
 // (and the local panel) whether the agent is alive, what version is
 // running and the current state of every registered printer.
 type HealthResponse struct {
-	OK        bool             `json:"ok"`
-	Version   string           `json:"version"`
-	Commit    string           `json:"commit"`
-	BuildTime string           `json:"build_time"`
-	UptimeSec int64            `json:"uptime_sec"`
-	Tenant    TenantInfo       `json:"tenant"`
-	Printers  []PrinterSummary `json:"printers"`
+	OK        bool              `json:"ok"`
+	Version   string            `json:"version"`
+	Commit    string            `json:"commit"`
+	BuildTime string            `json:"build_time"`
+	UptimeSec int64             `json:"uptime_sec"`
+	Tenant    TenantInfo        `json:"tenant"`
+	Printers  []PrinterSummary  `json:"printers"`
+	Telemetry *telemetry.Status `json:"telemetry,omitempty"`
+	Updater   *updater.Status   `json:"updater,omitempty"`
 }
 
 // TenantInfo identifies which tenant/branch the agent is configured to
@@ -55,6 +59,16 @@ func healthHandler(d Deps) http.HandlerFunc {
 				LastError:   p.LastError,
 			})
 		}
+		var telStatus *telemetry.Status
+		if d.Telemetry != nil {
+			st := d.Telemetry.GetStatus()
+			telStatus = &st
+		}
+		var upStatus *updater.Status
+		if d.Updater != nil {
+			st := d.Updater.GetStatus()
+			upStatus = &st
+		}
 		resp := HealthResponse{
 			OK:        true,
 			Version:   version.Version,
@@ -65,7 +79,9 @@ func healthHandler(d Deps) http.HandlerFunc {
 				ID:       cfg.Tenant.ID,
 				BranchID: cfg.Tenant.BranchID,
 			},
-			Printers: summaries,
+			Printers:  summaries,
+			Telemetry: telStatus,
+			Updater:   upStatus,
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}

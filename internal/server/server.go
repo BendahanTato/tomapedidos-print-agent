@@ -12,6 +12,8 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -21,6 +23,8 @@ import (
 	"github.com/tomapedidos/print-agent/internal/eventbus"
 	"github.com/tomapedidos/print-agent/internal/printer"
 	"github.com/tomapedidos/print-agent/internal/queue"
+	"github.com/tomapedidos/print-agent/internal/telemetry"
+	"github.com/tomapedidos/print-agent/internal/updater"
 )
 
 // webFS embeds the static panel assets (index.html, js/, css/).
@@ -34,6 +38,8 @@ type Deps struct {
 	Registry  *printer.Registry
 	Queue     *queue.Queue
 	Pool      *queue.Pool
+	Telemetry *telemetry.Reporter
+	Updater   *updater.Updater
 	EventBus  *eventbus.Bus // nil = events disabled
 	Log       *slog.Logger
 	StartedAt time.Time
@@ -93,6 +99,7 @@ func New(d Deps) http.Handler {
 
 	// Public endpoints (called by the SaaS browser, no PIN required).
 	r.Get("/health", healthHandler(d))
+	r.Post("/pair", pairHandler(d))
 	r.Get("/printers", listPrintersHandler(d))
 	r.Get("/printers/{id}", getPrinterHandler(d))
 	r.Get("/events", eventsHandler(d))
@@ -113,6 +120,9 @@ func New(d Deps) http.Handler {
 		pr.Get("/config", configGetHandler(d))
 		pr.Put("/config", configPutHandler(d))
 		pr.Get("/printers/detect", detectPrintersHandler(d))
+		pr.Post("/telemetry/ping", telemetryPingHandler(d))
+		pr.Post("/update/check", updateCheckHandler(d))
+		pr.Post("/update/apply", updateApplyHandler(d))
 	})
 
 	// SPA panel — all unmatched routes fall back to index.html so
@@ -239,6 +249,160 @@ func configPutHandler(d Deps) http.HandlerFunc {
 // DetectSystemPrinters scans the OS spooler for installed printers.
 func DetectSystemPrinters(ctx context.Context) ([]DetectedPrinter, error) {
 	return detectSystemPrinters(ctx)
+}
+
+// pairHandler lets the TomaPedidos web app link this local PC in 1 click by
+// posting tenant_id, branch_id, token, and optional endpoint_url. Because it
+// requires no local PIN, endpoint_url is restricted to trusted TomaPedidos
+// domains (or localhost in dev/tests) to prevent cross-site exfiltration.
+func pairHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			TenantID    string `json:"tenant_id"`
+			BranchID    string `json:"branch_id"`
+			Token       string `json:"token"`
+			EndpointURL string `json:"endpoint_url"`
+		}
+		if !decodeJSON(w, r, d.Log, &req) {
+			return
+		}
+		req.TenantID = strings.TrimSpace(req.TenantID)
+		req.BranchID = strings.TrimSpace(req.BranchID)
+		req.Token = strings.TrimSpace(req.Token)
+		req.EndpointURL = strings.TrimSpace(req.EndpointURL)
+
+		if req.TenantID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_payload", "tenant_id is required")
+			return
+		}
+		endpoint := req.EndpointURL
+		if endpoint == "" {
+			endpoint = config.DefaultTelemetryEndpoint
+		}
+		if !isTrustedPairEndpoint(endpoint) {
+			writeError(w, http.StatusForbidden, "untrusted_endpoint", "endpoint_url host is not an allowed TomaPedidos domain")
+			return
+		}
+
+		cfg := d.Config.Get()
+		cfg.Tenant.ID = req.TenantID
+		if req.BranchID != "" {
+			cfg.Tenant.BranchID = req.BranchID
+		}
+		cfg.Telemetry.Enabled = true
+		cfg.Telemetry.EndpointURL = endpoint
+		if req.Token != "" {
+			cfg.Telemetry.Token = req.Token
+		}
+		if cfg.Telemetry.IntervalSec <= 0 {
+			cfg.Telemetry.IntervalSec = 60
+		}
+		if err := d.Config.Replace(cfg); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
+			return
+		}
+
+		if d.Telemetry != nil {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = d.Telemetry.SendOnce(ctx)
+			}()
+		}
+
+		d.Log.Info("agent paired with TomaPedidos cloud",
+			slog.String("tenant_id", cfg.Tenant.ID),
+			slog.String("branch_id", cfg.Tenant.BranchID),
+			slog.String("endpoint", endpoint),
+		)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":           true,
+			"tenant_id":    cfg.Tenant.ID,
+			"branch_id":    cfg.Tenant.BranchID,
+			"endpoint_url": endpoint,
+		})
+	}
+}
+
+func isTrustedPairEndpoint(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || host == "127.0.0.1" {
+		return true
+	}
+	if u.Scheme != "https" {
+		return false
+	}
+	return host == "tomapedidos.online" ||
+		strings.HasSuffix(host, ".tomapedidos.online") ||
+		strings.HasSuffix(host, ".vercel.app")
+}
+
+func telemetryPingHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if d.Telemetry == nil {
+			writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry reporter not initialized")
+			return
+		}
+		if err := d.Telemetry.SendOnce(r.Context()); err != nil {
+			writeError(w, http.StatusBadGateway, "telemetry_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     true,
+			"status": d.Telemetry.GetStatus(),
+		})
+	}
+}
+
+func updateCheckHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if d.Updater == nil {
+			writeError(w, http.StatusServiceUnavailable, "updater_unavailable", "updater not initialized")
+			return
+		}
+		latest, err := d.Updater.CheckLatest(r.Context())
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "update_check_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     true,
+			"latest": latest,
+			"status": d.Updater.GetStatus(),
+		})
+	}
+}
+
+func updateApplyHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if d.Updater == nil {
+			writeError(w, http.StatusServiceUnavailable, "updater_unavailable", "updater not initialized")
+			return
+		}
+		var req struct {
+			Version string `json:"version"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		target := req.Version
+		forceExact := target != "" && target != "latest"
+
+		applyCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		updated, err := d.Updater.Apply(applyCtx, target, forceExact)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "update_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"updated": updated,
+			"status":  d.Updater.GetStatus(),
+		})
+	}
 }
 
 // detectPrintersHandler scans the OS for installed printers and

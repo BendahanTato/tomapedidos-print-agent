@@ -526,11 +526,110 @@
   async function loadSettings() { renderSettings(); }
   async function renderSettings() {
     var v = $('#view-settings');
-    try { configData = await api('GET', '/config'); } catch (e) { v.innerHTML = '<p class="text-muted">Error al cargar config</p>'; return; }
+    try {
+      configData = await api('GET', '/config');
+      healthData = await api('GET', '/health');
+    } catch (e) { v.innerHTML = '<p class="text-muted">Error al cargar config</p>'; return; }
+
+    var telCfg = configData.telemetry || {};
+    var upCfg = configData.auto_update || {};
+    var telSt = (healthData && healthData.telemetry) || {};
+    var upSt = (healthData && healthData.updater) || {};
+
+    var telStatusLine = 'Sin envíos aún';
+    if (telSt.last_sent_at && telSt.last_sent_at !== '0001-01-01T00:00:00Z') {
+      telStatusLine = 'Último envío: ' + new Date(telSt.last_sent_at).toLocaleTimeString() +
+        (telSt.last_error ? ' · Error: ' + telSt.last_error : ' · OK (HTTP ' + (telSt.last_status_code || 200) + ')');
+    }
+
+    var upStatusLine = 'Instalada: ' + ((healthData && healthData.version) || '?');
+    if (upSt.available_version) {
+      upStatusLine += ' · Nueva versión disponible: ' + upSt.available_version;
+    } else if (upSt.last_check_at && upSt.last_check_at !== '0001-01-01T00:00:00Z') {
+      upStatusLine += ' · Último chequeo: ' + new Date(upSt.last_check_at).toLocaleTimeString();
+    }
+    if (upSt.last_error) {
+      upStatusLine += ' · Error: ' + upSt.last_error;
+    }
+
     v.innerHTML =
       '<h2 class="card-title" style="margin-bottom:1rem">Settings</h2>' +
+      '<div class="card"><h3 class="card-title mb-2">Comercio / Sucursal</h3>' +
+        '<div class="grid-2">' +
+          '<div class="form-group"><label class="form-label">Tenant ID</label><input class="form-input" id="s-tenant" value="' + esc((configData.tenant && configData.tenant.id) || '') + '"></div>' +
+          '<div class="form-group"><label class="form-label">Branch ID</label><input class="form-input" id="s-branch" value="' + esc((configData.tenant && configData.tenant.branch_id) || '') + '"></div>' +
+        '</div>' +
+        '<button class="btn btn-primary btn-sm" id="s-save-tenant">Guardar Comercio</button>' +
+      '</div>' +
+      '<div class="card"><h3 class="card-title mb-2">Monitoreo Remoto (Heartbeat HTTPS)</h3>' +
+        '<label class="flex items-center gap-1 mb-2" style="cursor:pointer"><input type="checkbox" id="s-tel-enabled"' + (telCfg.enabled ? ' checked' : '') + '> <span>Enviar estado periódico a la nube</span></label>' +
+        '<div class="form-group"><label class="form-label">Endpoint URL</label><input class="form-input" id="s-tel-url" placeholder="https://www.tomapedidos.online/api/print-agent/heartbeat" value="' + esc(telCfg.endpoint_url || 'https://www.tomapedidos.online/api/print-agent/heartbeat') + '"></div>' +
+        '<div class="grid-2">' +
+          '<div class="form-group"><label class="form-label">Bearer Token (opcional)</label><input class="form-input" id="s-tel-token" type="password" value="' + esc(telCfg.token || '') + '"></div>' +
+          '<div class="form-group"><label class="form-label">Intervalo (segundos)</label><input class="form-input" id="s-tel-interval" type="number" min="10" value="' + (telCfg.interval_sec || 60) + '"></div>' +
+        '</div>' +
+        '<p class="text-muted mb-2" style="font-size:13px">' + esc(telStatusLine) + '</p>' +
+        '<div class="flex gap-1"><button class="btn btn-primary btn-sm" id="s-save-tel">Guardar Monitoreo</button><button class="btn btn-sm" id="s-ping-tel">Probar envío ahora</button></div>' +
+      '</div>' +
+      '<div class="card"><h3 class="card-title mb-2">Actualizaciones Remotas</h3>' +
+        '<label class="flex items-center gap-1 mb-2" style="cursor:pointer"><input type="checkbox" id="s-up-enabled"' + (upCfg.enabled !== false ? ' checked' : '') + '> <span>Actualizar automáticamente desde GitHub Releases (verificado con SHA256)</span></label>' +
+        '<p class="text-muted mb-2" style="font-size:13px">' + esc(upStatusLine) + '</p>' +
+        '<div class="flex gap-1"><button class="btn btn-primary btn-sm" id="s-save-up">Guardar</button><button class="btn btn-sm" id="s-check-up">Buscar actualización</button><button class="btn btn-sm" id="s-apply-up">Actualizar ahora</button></div>' +
+      '</div>' +
       '<div class="card"><h3 class="card-title mb-2">PIN del panel</h3><div class="flex gap-1"><input class="form-input" id="s-pin" type="password" maxlength="8" value="' + esc(configData.panel.pin || '') + '" style="width:160px"><button class="btn btn-primary btn-sm" id="s-save-pin">Guardar</button></div></div>' +
-      '<div class="card"><h3 class="card-title mb-2">Acerca de</h3><p class="text-muted">TomaPedidos Print Agent · M5</p><p class="text-muted">Versión: ' + esc((healthData && healthData.version) || '?') + '</p><p class="text-muted">Commit: ' + esc((healthData && healthData.commit) || '?') + '</p></div>';
+      '<div class="card"><h3 class="card-title mb-2">Acerca de</h3><p class="text-muted">TomaPedidos Print Agent</p><p class="text-muted">Versión: ' + esc((healthData && healthData.version) || '?') + '</p><p class="text-muted">Commit: ' + esc((healthData && healthData.commit) || '?') + '</p></div>';
+
+    $('#s-save-tenant').onclick = async function () {
+      configData.tenant = { id: $('#s-tenant').value.trim(), branch_id: $('#s-branch').value.trim() };
+      try { await api('PUT', '/config', configData); toast('Comercio guardado', 'success'); renderSettings(); }
+      catch (e) { toast('Error: ' + e.message, 'error'); }
+    };
+
+    $('#s-save-tel').onclick = async function () {
+      configData.telemetry = {
+        enabled: $('#s-tel-enabled').checked,
+        endpoint_url: $('#s-tel-url').value.trim(),
+        token: $('#s-tel-token').value.trim(),
+        interval_sec: parseInt($('#s-tel-interval').value, 10) || 60
+      };
+      try { await api('PUT', '/config', configData); toast('Monitoreo guardado', 'success'); renderSettings(); }
+      catch (e) { toast('Error: ' + e.message, 'error'); }
+    };
+
+    $('#s-ping-tel').onclick = async function () {
+      try {
+        await api('POST', '/telemetry/ping');
+        toast('Heartbeat enviado con éxito', 'success');
+        renderSettings();
+      } catch (e) { toast('Error al enviar: ' + e.message, 'error'); renderSettings(); }
+    };
+
+    $('#s-save-up').onclick = async function () {
+      configData.auto_update = configData.auto_update || {};
+      configData.auto_update.enabled = $('#s-up-enabled').checked;
+      try { await api('PUT', '/config', configData); toast('Preferencia guardada', 'success'); renderSettings(); }
+      catch (e) { toast('Error: ' + e.message, 'error'); }
+    };
+
+    $('#s-check-up').onclick = async function () {
+      try {
+        var r = await api('POST', '/update/check');
+        toast('Última release en GitHub: ' + (r.latest || '?'), 'success');
+        renderSettings();
+      } catch (e) { toast('Error: ' + e.message, 'error'); renderSettings(); }
+    };
+
+    $('#s-apply-up').onclick = async function () {
+      try {
+        var r = await api('POST', '/update/apply', {});
+        if (r.updated) {
+          toast('Actualización descargada y verificada. Reiniciando servicio...', 'success');
+          setTimeout(function () { renderSettings(); }, 4000);
+        } else {
+          toast('Ya estás en la última versión', 'success');
+        }
+      } catch (e) { toast('Error al actualizar: ' + e.message, 'error'); renderSettings(); }
+    };
 
     $('#s-save-pin').onclick = async function () {
       var pin = $('#s-pin').value.trim();

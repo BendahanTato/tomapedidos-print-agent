@@ -64,15 +64,42 @@ type Panel struct {
 	PIN     string `json:"pin"`
 }
 
+// Telemetry configures outbound HTTPS heartbeats so operators can monitor
+// agent liveness, printer status, and failed jobs remotely without opening
+// inbound ports or tunnels.
+type Telemetry struct {
+	Enabled     bool   `json:"enabled"`
+	EndpointURL string `json:"endpoint_url,omitempty"`
+	Token       string `json:"token,omitempty"`
+	IntervalSec int    `json:"interval_sec,omitempty"`
+}
+
+// AutoUpdate configures pull-based remote updates from GitHub Releases,
+// verified against SHA256SUMS before replacing the executable.
+type AutoUpdate struct {
+	Enabled          bool   `json:"enabled"`
+	Repo             string `json:"repo,omitempty"`
+	CheckIntervalMin int    `json:"check_interval_min,omitempty"`
+}
+
+// DefaultUpdateRepo is the official GitHub repository used for self-updates.
+const DefaultUpdateRepo = "BendahanTato/tomapedidos-print-agent"
+
+// DefaultTelemetryEndpoint is the canonical production TomaPedidos heartbeat URL
+// (using www.tomapedidos.online directly to avoid the 308 redirect on apex).
+const DefaultTelemetryEndpoint = "https://www.tomapedidos.online/api/print-agent/heartbeat"
+
 // Config is the root of the JSON file.
 type Config struct {
-	Port     int       `json:"port"`
-	Bind     string    `json:"bind"`
-	LogFile  string    `json:"log_file,omitempty"`
-	Tenant   Tenant    `json:"tenant"`
-	Printers []Printer `json:"printers"`
-	Queue    Queue     `json:"queue"`
-	Panel    Panel     `json:"panel"`
+	Port       int        `json:"port"`
+	Bind       string     `json:"bind"`
+	LogFile    string     `json:"log_file,omitempty"`
+	Tenant     Tenant     `json:"tenant"`
+	Printers   []Printer  `json:"printers"`
+	Queue      Queue      `json:"queue"`
+	Panel      Panel      `json:"panel"`
+	Telemetry  Telemetry  `json:"telemetry"`
+	AutoUpdate AutoUpdate `json:"auto_update"`
 }
 
 // Default returns a starter configuration that the agent writes on first
@@ -108,6 +135,16 @@ func Default() Config {
 		Panel: Panel{
 			Enabled: true,
 			PIN:     "0000",
+		},
+		Telemetry: Telemetry{
+			Enabled:     false,
+			EndpointURL: DefaultTelemetryEndpoint,
+			IntervalSec: 60,
+		},
+		AutoUpdate: AutoUpdate{
+			Enabled:          true,
+			Repo:             DefaultUpdateRepo,
+			CheckIntervalMin: 60,
 		},
 	}
 }
@@ -146,6 +183,8 @@ func Load(path string, create bool) (*Store, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	var cfg Config
+	cfg.Telemetry = Default().Telemetry
+	cfg.AutoUpdate = Default().AutoUpdate
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
@@ -281,6 +320,21 @@ func (c *Config) Validate() error {
 	}
 	if c.Queue.MaxRetries < 0 {
 		return fmt.Errorf("queue.max_retries must be >= 0")
+	}
+	if c.Telemetry.IntervalSec < 0 {
+		return fmt.Errorf("telemetry.interval_sec must be >= 0")
+	}
+	if c.Telemetry.Enabled {
+		u := strings.TrimSpace(c.Telemetry.EndpointURL)
+		if u == "" {
+			return errors.New("telemetry.endpoint_url is required when telemetry.enabled is true")
+		}
+		if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+			return errors.New("telemetry.endpoint_url must start with https:// or http://")
+		}
+	}
+	if c.AutoUpdate.CheckIntervalMin < 0 {
+		return fmt.Errorf("auto_update.check_interval_min must be >= 0")
 	}
 	return nil
 }

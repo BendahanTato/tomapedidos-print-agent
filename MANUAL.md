@@ -428,3 +428,67 @@ En Windows, ejecutá nuevamente el instalador como administrador: descarga y
 verifica la versión, reconfigura el servicio existente sin borrarlo y valida
 su endpoint de salud. La configuración, los datos y los logs permanecen en
 `%ProgramData%\Tomapedidos\{config,data,logs}`.
+
+---
+
+## 10. Monitoreo Remoto y Actualizaciones Automáticas
+
+### 10.1 Monitoreo Remoto (Heartbeat HTTPS saliente)
+
+El agente puede reportar su estado periódicamente a tu backend sin abrir puertos entrantes ni VPNs. Se configura en `printers.json` o desde `http://127.0.0.1:4510` → **Settings**:
+
+```json
+"telemetry": {
+  "enabled": true,
+  "endpoint_url": "https://www.tomapedidos.online/api/print-agent/heartbeat",
+  "token": "TOKEN_DE_SUCURSAL",
+  "interval_sec": 60
+}
+```
+
+También se puede vincular en **1 clic desde TomaPedidos web** sin entrar al panel local enviando desde el navegador del cajero:
+```http
+POST http://127.0.0.1:4510/pair
+Content-Type: application/json
+
+{
+  "tenant_id": "tenant_xxx",
+  "branch_id": "branch_yyy",
+  "token": "TOKEN_DE_SUCURSAL"
+}
+```
+(Si no se envía `endpoint_url`, usa automáticamente `https://www.tomapedidos.online/api/print-agent/heartbeat`; para entornos preview permite `*.tomapedidos.online` y `*.vercel.app`).
+
+Cada `interval_sec` segundos envía un `POST` con `Authorization: Bearer <token>`:
+
+```json
+{
+  "hostname": "CAJA-PC",
+  "os": "windows",
+  "arch": "amd64",
+  "version": "v0.4.1",
+  "uptime_sec": 3600,
+  "sent_at": "2026-11-26T23:40:00Z",
+  "tenant": { "id": "tenant_xxx", "branch_id": "branch_yyy" },
+  "printers": [
+    { "id": "cocina", "name": "Cocina", "type": "usb", "status": "online", "queue_depth": 0, "last_error": "" }
+  ],
+  "jobs": { "queued": 0, "printing": 0, "failed": 1 },
+  "recent_failed_jobs": [
+    { "id": "...", "printer_id": "cocina", "last_error": "OpenPrinter(POS-58): ...", "finished_at": "..." }
+  ],
+  "updater": { "enabled": true, "current_version": "v0.4.1" }
+}
+```
+
+### 10.2 Actualizaciones Remotas (con verificación SHA256 y Rollback)
+
+Por defecto `auto_update.enabled` viene en `true`:
+
+1. **Automática desde GitHub Releases**: cada 60 minutos consulta la última release publicada en `BendahanTato/tomapedidos-print-agent`. Si es más nueva, descarga el binario, valida su `SHA256SUMS`, ejecuta un smoke test (`print-agent version`), espera a que no haya tickets imprimiéndose, reemplaza el ejecutable y pide reinicio al servicio del SO (SCM / systemd / launchd).
+2. **Dirigida desde tu backend (upgrade o rollback por sucursal)**: si el endpoint de heartbeat responde:
+   ```json
+   { "ok": true, "target_version": "v0.4.2" }
+   ```
+   el agente instala inmediatamente esa versión exacta (incluso si es una versión anterior para hacer rollback ante un bug).
+3. **Manual por CLI o Panel**: desde **Settings → Actualizar ahora** o ejecutando `print-agent update [--version v0.4.2]`.
