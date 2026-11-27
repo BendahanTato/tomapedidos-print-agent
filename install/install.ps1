@@ -223,7 +223,7 @@ function Test-PortBlocked {
 function Test-IsLikelyThermalPrinter {
   param($Printer)
   $text = "$($Printer.Name) $($Printer.DriverName)".ToLowerInvariant()
-  foreach ($kw in @("pos", "tm-", "epson", "xp-", "xprinter", "elgin", "bematech", "thermal", "termica", "ticke", "80mm", "58mm", "generic / text", "bixolon", "star ")) {
+  foreach ($kw in @("pos-", "pos58", "pos80", "tm-", "epson tm", "xp-", "xprinter", "elgin", "bematech", "thermal", "termica", "ticke", "80mm", "58mm", "generic / text", "bixolon", "star ")) {
     if ($text.Contains($kw)) {
       return $true
     }
@@ -279,7 +279,7 @@ function Show-GuiPrinterWizard {
 
   $form = New-Object System.Windows.Forms.Form
   $form.Text = "TomaPedidos Print Agent - Configurar Impresoras"
-  $form.Size = New-Object System.Drawing.Size(580, 610)
+  $form.Size = New-Object System.Drawing.Size(590, 645)
   $form.StartPosition = "CenterScreen"
   $form.FormBorderStyle = "FixedDialog"
   $form.MaximizeBox = $false
@@ -296,27 +296,27 @@ function Show-GuiPrinterWizard {
   $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Bold)
   $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(154, 52, 18)
   $lblTitle.Location = New-Object System.Drawing.Point(24, 16)
-  $lblTitle.Size = New-Object System.Drawing.Size(520, 26)
+  $lblTitle.Size = New-Object System.Drawing.Size(530, 26)
   $form.Controls.Add($lblTitle)
 
   $lblSub = New-Object System.Windows.Forms.Label
-  $lblSub.Text = "Tilda todas las impresoras que usa el local (luego las asignas a cada comanda en TomaPedidos)."
+  $lblSub.Text = "Tilda las impresoras que usa el local (luego las asignas a cada comanda en TomaPedidos)."
   $lblSub.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
   $lblSub.Location = New-Object System.Drawing.Point(24, 44)
-  $lblSub.Size = New-Object System.Drawing.Size(525, 22)
+  $lblSub.Size = New-Object System.Drawing.Size(530, 34)
   $form.Controls.Add($lblSub)
 
   $lblList = New-Object System.Windows.Forms.Label
   $lblList.Text = "1. Impresoras detectadas (podes tildar una o varias):"
   $lblList.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-  $lblList.Location = New-Object System.Drawing.Point(24, 74)
-  $lblList.Size = New-Object System.Drawing.Size(520, 20)
+  $lblList.Location = New-Object System.Drawing.Point(24, 82)
+  $lblList.Size = New-Object System.Drawing.Size(530, 20)
   $form.Controls.Add($lblList)
 
   $chkPrinters = New-Object System.Windows.Forms.CheckedListBox
   $chkPrinters.CheckOnClick = $true
-  $chkPrinters.Location = New-Object System.Drawing.Point(24, 98)
-  $chkPrinters.Size = New-Object System.Drawing.Size(518, 135)
+  $chkPrinters.Location = New-Object System.Drawing.Point(24, 106)
+  $chkPrinters.Size = New-Object System.Drawing.Size(526, 130)
   $chkPrinters.BorderStyle = "FixedSingle"
 
   $printerItems = [System.Collections.ArrayList]::new()
@@ -504,8 +504,8 @@ function Show-GuiPrinterWizard {
     $list = [System.Collections.ArrayList]::new()
     foreach ($i in $checkedIndices) {
       $item = $printerItems[$i]
-      $pId = New-PrinterSlugId -Name $item.Name -UsedIds $usedIds
-      $pObj = New-DefaultPrinterObject -Id $pId -Name $item.Name -Type $item.Type -SystemName $item.SystemName -HostIp $item.Host -NetPort $item.Port -CharsPerLine $chars
+      $printerSlug = New-PrinterSlugId -Name $item.Name -UsedIds $usedIds
+      $pObj = New-DefaultPrinterObject -Id $printerSlug -Name $item.Name -Type $item.Type -SystemName $item.SystemName -HostIp $item.Host -NetPort $item.Port -CharsPerLine $chars
       [void]$list.Add($pObj)
     }
     $CfgJson.printers = @($list)
