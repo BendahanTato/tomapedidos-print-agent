@@ -804,7 +804,23 @@ try {
     Add-StepResult -StepId "2_respaldo" -Title "Respaldo previo a actualizacion" -Status "ok" -Detail $backupDir
   }
 
-  Copy-Item -Force -Path $tempFile -Destination $dest
+  # Asegurar que no quede ningun proceso print-agent mapeado en memoria antes de reemplazar el binario.
+  Get-Process -Name "print-agent" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  $copied = $false
+  $lastCopyErr = $null
+  for ($attempt = 1; $attempt -le 10; $attempt++) {
+    try {
+      Copy-Item -Force -Path $tempFile -Destination $dest -ErrorAction Stop
+      $copied = $true
+      break
+    } catch {
+      $lastCopyErr = $_.Exception.Message
+      Start-Sleep -Milliseconds 500
+    }
+  }
+  if (-not $copied) {
+    throw "No se pudo reemplazar $dest (intentos agotados): $lastCopyErr"
+  }
   Remove-Item -Force -ErrorAction SilentlyContinue $tempFile
   if ($isMigration -and (Test-Path -Path $legacyJobsPattern)) {
     Copy-Item -Path $legacyJobsPattern -Destination $dataDir -Force
